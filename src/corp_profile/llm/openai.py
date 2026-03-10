@@ -12,6 +12,11 @@ class OpenAIProvider:
     """LLM provider using OpenAI Chat Completions and Responses APIs."""
 
     def __init__(self, model: str) -> None:
+        if OpenAI is None:
+            raise ImportError(
+                "The 'openai' package is required for OpenAIProvider. "
+                "Install it with: uv sync --extra openai"
+            )
         self.model = model
         self.client = OpenAI()
 

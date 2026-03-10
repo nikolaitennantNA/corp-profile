@@ -45,17 +45,33 @@ def enrich_profile(
     provider = get_provider(config.model)
     all_changes: list[str] = []
 
+    def _apply_stage(
+        raw: str, stage_name: str
+    ) -> CompanyProfile | None:
+        """Parse LLM response, extract changes, return updated profile or None."""
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            all_changes.append(f"[{stage_name}] WARNING: LLM returned invalid JSON, skipping")
+            return None
+        if "changes" in data:
+            all_changes.extend(data["changes"])
+        if "profile" in data:
+            try:
+                return CompanyProfile.model_validate(data["profile"])
+            except Exception:
+                all_changes.append(
+                    f"[{stage_name}] WARNING: LLM returned invalid profile data, skipping"
+                )
+        return None
+
     # Stage 1: Clean & validate
     clean_messages = [
         {"role": "system", "content": prompts.CLEAN_SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps(profile.model_dump(), default=str)},
     ]
     clean_raw = provider.complete(clean_messages, json_mode=True)
-    clean_data = json.loads(clean_raw)
-    if "changes" in clean_data:
-        all_changes.extend(clean_data["changes"])
-    if "profile" in clean_data:
-        profile = CompanyProfile.model_validate(clean_data["profile"])
+    profile = _apply_stage(clean_raw, "clean") or profile
 
     # Stage 2a (optional): Web search for structured discovery
     if config.web_search:
@@ -68,11 +84,7 @@ def enrich_profile(
         search_raw = search_provider.complete(
             search_messages, json_mode=True, web_search=True
         )
-        search_data = json.loads(search_raw)
-        if "changes" in search_data:
-            all_changes.extend(search_data["changes"])
-        if "profile" in search_data:
-            profile = CompanyProfile.model_validate(search_data["profile"])
+        profile = _apply_stage(search_raw, "web_search") or profile
 
     # Stage 2b: Enrich descriptions and context
     enrich_messages = [
@@ -80,10 +92,6 @@ def enrich_profile(
         {"role": "user", "content": json.dumps(profile.model_dump(), default=str)},
     ]
     enrich_raw = provider.complete(enrich_messages, json_mode=True)
-    enrich_data = json.loads(enrich_raw)
-    if "changes" in enrich_data:
-        all_changes.extend(enrich_data["changes"])
-    if "profile" in enrich_data:
-        profile = CompanyProfile.model_validate(enrich_data["profile"])
+    profile = _apply_stage(enrich_raw, "enrich") or profile
 
     return profile, all_changes

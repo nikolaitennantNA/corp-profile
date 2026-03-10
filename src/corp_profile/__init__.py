@@ -1,6 +1,5 @@
 """corp-profile: Build rich company context documents from corp-graph Postgres."""
 
-from .enrich import EnrichConfig, enrich_profile
 from .profile import (
     CompanyProfile,
     build_context_document,
@@ -20,3 +19,14 @@ __all__ = [
     "enrich_profile",
     "save_profile",
 ]
+
+
+def __getattr__(name: str):
+    """Lazy-load enrichment exports to avoid importing LLM deps eagerly."""
+    if name == "EnrichConfig":
+        from .enrich import EnrichConfig
+        return EnrichConfig
+    if name == "enrich_profile":
+        from .enrich import enrich_profile
+        return enrich_profile
+    raise AttributeError(f"module 'corp_profile' has no attribute {name!r}")

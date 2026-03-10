@@ -12,6 +12,11 @@ class BedrockProvider:
     """LLM provider using Amazon Bedrock Converse API."""
 
     def __init__(self, model: str) -> None:
+        if boto3 is None:
+            raise ImportError(
+                "The 'boto3' package is required for BedrockProvider. "
+                "Install it with: uv sync --extra bedrock"
+            )
         self.model = model
         self.client = boto3.client("bedrock-runtime")
 

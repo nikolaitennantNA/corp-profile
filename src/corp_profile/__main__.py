@@ -85,7 +85,11 @@ def _run_enrich(profile):
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    profile, changes = enrich_profile(profile, config)
+    try:
+        profile, changes = enrich_profile(profile, config)
+    except Exception as e:
+        print(f"Enrichment failed: {e}", file=sys.stderr)
+        sys.exit(1)
     if changes:
         print("Enrichment changes:", file=sys.stderr)
         for c in changes:
