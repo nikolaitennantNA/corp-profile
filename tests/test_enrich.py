@@ -34,3 +34,81 @@ class TestEnrichConfig:
     def test_direct_construction(self):
         config = EnrichConfig(model="openai/gpt-5")
         assert config.web_search is False
+
+
+from corp_profile.enrich import enrich_profile
+
+
+class TestEnrichProfile:
+    def _make_mock_provider(self, responses: list[str]) -> MagicMock:
+        """Create a mock LLM provider returning canned responses."""
+        provider = MagicMock()
+        provider.complete = MagicMock(side_effect=responses)
+        return provider
+
+    @patch("corp_profile.enrich.get_provider")
+    def test_clean_only(self, mock_get_provider, sample_profile):
+        cleaned_data = sample_profile.model_dump()
+        cleaned_data["legal_name"] = "Acme Corporation"
+        clean_response = json.dumps({
+            "profile": cleaned_data,
+            "changes": ["Fixed company name: Acme Corp -> Acme Corporation"],
+        })
+        enrich_response = json.dumps({
+            "profile": cleaned_data,
+            "changes": [],
+        })
+        mock_provider = self._make_mock_provider([clean_response, enrich_response])
+        mock_get_provider.return_value = mock_provider
+
+        config = EnrichConfig(model="openai/gpt-5")
+        result, changes = enrich_profile(sample_profile, config)
+
+        assert result.legal_name == "Acme Corporation"
+        assert "Fixed company name" in changes[0]
+        assert mock_provider.complete.call_count == 2
+
+    @patch("corp_profile.enrich.get_provider")
+    def test_with_web_search(self, mock_get_provider, sample_profile):
+        profile_data = sample_profile.model_dump()
+        clean_response = json.dumps({"profile": profile_data, "changes": []})
+        search_response = json.dumps({"profile": profile_data, "changes": []})
+        enrich_response = json.dumps({"profile": profile_data, "changes": []})
+
+        mock_main = self._make_mock_provider([clean_response, enrich_response])
+        mock_search = self._make_mock_provider([search_response])
+
+        def pick_provider(slug):
+            if slug == "openai/gpt-4o":
+                return mock_search
+            return mock_main
+
+        mock_get_provider.side_effect = pick_provider
+
+        config = EnrichConfig(
+            model="bedrock/claude-3",
+            web_search=True,
+            web_search_model="openai/gpt-4o",
+        )
+        result, changes = enrich_profile(sample_profile, config)
+
+        # Main provider called for clean + enrich
+        assert mock_main.complete.call_count == 2
+        # Search provider called once with web_search=True
+        mock_search.complete.assert_called_once()
+        search_call = mock_search.complete.call_args
+        assert search_call.kwargs.get("web_search") is True or search_call[1].get("web_search") is True
+
+    @patch("corp_profile.enrich.get_provider")
+    def test_web_search_defaults_to_main_model(self, mock_get_provider, sample_profile):
+        profile_data = sample_profile.model_dump()
+        response = json.dumps({"profile": profile_data, "changes": []})
+        mock_provider = self._make_mock_provider([response, response, response])
+        mock_get_provider.return_value = mock_provider
+
+        config = EnrichConfig(model="openai/gpt-5", web_search=True)
+        enrich_profile(sample_profile, config)
+
+        # Should call get_provider with main model for search too
+        calls = [c.args[0] for c in mock_get_provider.call_args_list]
+        assert all(s == "openai/gpt-5" for s in calls)
