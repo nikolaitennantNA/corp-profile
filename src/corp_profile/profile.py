@@ -44,33 +44,18 @@ def _resolve_entity(conn, identifier: str) -> dict:
     if row:
         return dict(row)
 
-    # 1b. ISIN — match against securities table (covers subsidiary/bond ISINs),
-    #     then walk up to the parent entity via relationships
+    # 1b. ISIN — match against securities table (covers any ISIN in the system)
     sec = conn.execute(
         "SELECT issuer_id FROM securities WHERE isin = %s LIMIT 1",
         [identifier],
     ).fetchone()
     if sec:
-        # Try direct match on company_universe first
         row = conn.execute(
             "SELECT * FROM company_universe WHERE issuer_id = %s",
             [sec["issuer_id"]],
         ).fetchone()
         if row:
             return dict(row)
-        # If it's a subsidiary, find the parent
-        rel = conn.execute(
-            "SELECT parent_issuer_id FROM relationships WHERE child_issuer_id = %s "
-            "AND rel_status = 'ACTIVE' LIMIT 1",
-            [sec["issuer_id"]],
-        ).fetchone()
-        if rel:
-            row = conn.execute(
-                "SELECT * FROM company_universe WHERE issuer_id = %s",
-                [rel["parent_issuer_id"]],
-            ).fetchone()
-            if row:
-                return dict(row)
 
     # 2. LEI (exact match)
     row = conn.execute(
