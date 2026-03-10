@@ -103,12 +103,22 @@ def enrich_profile(
     provider = get_provider(config.model, aws_region=config.aws_region, aws_profile=config.aws_profile)
     all_changes: list[str] = []
 
+    def _strip_markdown_fences(text: str) -> str:
+        """Strip ```json ... ``` wrappers that LLMs often add."""
+        text = text.strip()
+        if text.startswith("```"):
+            # Remove opening fence (```json or ```)
+            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        return text.strip()
+
     def _apply_stage(
         raw: str, stage_name: str
     ) -> CompanyProfile | None:
         """Parse LLM response, extract changes, return updated profile or None."""
         try:
-            data = json.loads(raw)
+            data = json.loads(_strip_markdown_fences(raw))
         except json.JSONDecodeError:
             all_changes.append(f"[{stage_name}] WARNING: LLM returned invalid JSON, skipping")
             return None

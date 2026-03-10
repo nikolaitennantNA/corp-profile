@@ -30,7 +30,7 @@ class TestEnrichConfig:
         monkeypatch.delenv("CORPPROFILE_LLM_MODEL", raising=False)
         # load() reads from config.toml which has model set
         config = EnrichConfig.load()
-        assert config.model == "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
+        assert config.model == "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
         assert config.aws_region == "us-east-2"
 
     def test_env_overrides_config_toml(self, monkeypatch):
