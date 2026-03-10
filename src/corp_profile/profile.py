@@ -6,12 +6,27 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from .db import get_connection
 
 
-class Subsidiary(BaseModel):
+class _NullSafeModel(BaseModel):
+    """Base model that coerces None to empty string for str fields from DB NULLs."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_nulls(cls, data):
+        if not isinstance(data, dict):
+            return data
+        for field_name, field_info in cls.model_fields.items():
+            if field_name in data and data[field_name] is None:
+                if field_info.annotation is str or field_info.annotation == str:
+                    data[field_name] = ""
+        return data
+
+
+class Subsidiary(_NullSafeModel):
     """A subsidiary or child entity in the corporate structure."""
 
     issuer_id: str | None = None
@@ -22,7 +37,7 @@ class Subsidiary(BaseModel):
     rel_type: str = ""
 
 
-class Asset(BaseModel):
+class Asset(_NullSafeModel):
     """A known physical asset from the ALD database."""
 
     asset_name: str = ""
@@ -35,7 +50,7 @@ class Asset(BaseModel):
     status: str = ""
 
 
-class DiscoveredAsset(BaseModel):
+class DiscoveredAsset(_NullSafeModel):
     """An asset found during a previous search/discovery run."""
 
     asset_name: str = ""
@@ -45,7 +60,7 @@ class DiscoveredAsset(BaseModel):
     longitude: float | None = None
 
 
-class MaterialAssetType(BaseModel):
+class MaterialAssetType(_NullSafeModel):
     """An expected asset type with optional estimated count."""
 
     type: str = ""
@@ -202,7 +217,7 @@ def build_profile(identifier: str) -> CompanyProfile:
                 seen[key] = d
             elif d.get("lei") and not existing.get("lei"):
                 seen[key] = d
-        profile.subsidiaries = list(seen.values())
+        profile.subsidiaries = [Subsidiary.model_validate(v) for v in seen.values()]
 
         # 2b. Aggregate ISINs from parent + all subsidiaries
         sub_ids = [s.issuer_id for s in profile.subsidiaries if s.issuer_id]
@@ -238,8 +253,8 @@ def build_profile(identifier: str) -> CompanyProfile:
             if a.get("asset_name") and a.get("address")
         }
         profile.existing_assets = [
-            a for a in all_assets
-            if a.get("asset_name") or a.get("address", "")[:40] not in named
+            Asset.model_validate(a) for a in all_assets
+            if a.get("asset_name") or (a.get("address") or "")[:40] not in named
         ]
 
         # 4. Company profile (enriched)
@@ -267,7 +282,7 @@ def build_profile(identifier: str) -> CompanyProfile:
             """,
             [issuer_id],
         ).fetchall()
-        profile.discovered_assets = [dict(d) for d in discovered]
+        profile.discovered_assets = [DiscoveredAsset.model_validate(dict(d)) for d in discovered]
 
         # 6. Asset estimates
         est = conn.execute(
@@ -282,7 +297,10 @@ def build_profile(identifier: str) -> CompanyProfile:
             profile.estimated_asset_count = est.get("estimated_assets_count")
             raw_types = est.get("material_assets_types")
             if isinstance(raw_types, list):
-                profile.material_asset_types = raw_types
+                profile.material_asset_types = [
+                    MaterialAssetType.model_validate(t) if isinstance(t, dict) else MaterialAssetType(type=str(t))
+                    for t in raw_types
+                ]
 
     return profile
 
@@ -334,6 +352,7 @@ def build_profile_from_file(path: str) -> CompanyProfile:
 
 
 _ASSET_SAMPLE_SIZE = 10
+_SUB_SAMPLE_SIZE = 20
 
 def _country_name(code: str) -> str:
     """Resolve an ISO country code to its full name via pycountry, falling back to the code."""
@@ -390,8 +409,36 @@ def build_context_document(profile: CompanyProfile) -> str:
 
     # --- Corporate Structure ---
     if profile.subsidiaries:
-        sub_lines = [f"\n## Corporate Structure ({len(profile.subsidiaries)} subsidiaries)"]
+        total_subs = len(profile.subsidiaries)
+        parent_jur = (profile.jurisdiction or "").upper()
+
+        # Rank subsidiaries by data completeness and search relevance
+        def _sub_sort_key(s: Subsidiary) -> tuple:
+            has_ownership = s.ownership_percentage is not None
+            has_lei = bool(s.lei)
+            has_real_name = bool(s.legal_name) and not s.legal_name.startswith("UK Company ")
+            diff_jurisdiction = bool(s.jurisdiction) and s.jurisdiction.upper() != parent_jur
+            return (has_ownership, has_real_name, diff_jurisdiction, has_lei)
+
+        ranked = sorted(profile.subsidiaries, key=_sub_sort_key, reverse=True)
+        show_subs = ranked[:_SUB_SAMPLE_SIZE] if total_subs > _SUB_SAMPLE_SIZE else ranked
+
+        # Jurisdiction breakdown for large subsidiary lists
+        jur_counts: dict[str, int] = {}
         for s in profile.subsidiaries:
+            jur = _country_name(s.jurisdiction) if s.jurisdiction else "Unknown"
+            jur_counts[jur] = jur_counts.get(jur, 0) + 1
+
+        if total_subs > _SUB_SAMPLE_SIZE:
+            sub_lines = [
+                f"\n## Corporate Structure ({total_subs} subsidiaries "
+                f"across {len(jur_counts)} jurisdictions)"
+            ]
+            sub_lines.append(f"\n### Key Subsidiaries ({len(show_subs)} of {total_subs})")
+        else:
+            sub_lines = [f"\n## Corporate Structure ({total_subs} subsidiaries)"]
+
+        for s in show_subs:
             parts = [f"- **{s.legal_name or 'Unknown'}**"]
             if s.jurisdiction:
                 parts.append(f"({_country_name(s.jurisdiction)})")
@@ -400,6 +447,13 @@ def build_context_document(profile: CompanyProfile) -> str:
             if s.lei:
                 parts.append(f"[LEI: {s.lei}]")
             sub_lines.append(" ".join(parts))
+
+        # Show jurisdiction breakdown when capped
+        if total_subs > _SUB_SAMPLE_SIZE:
+            sub_lines.append("\n### Subsidiary Jurisdictions")
+            for jur, count in sorted(jur_counts.items(), key=lambda x: -x[1]):
+                sub_lines.append(f"- {jur}: {count}")
+
         sections.append("\n".join(sub_lines))
 
     # --- Asset Inventory ---
@@ -515,10 +569,22 @@ def build_context_document(profile: CompanyProfile) -> str:
         f"- **Company names to search:** {', '.join(search_names)}"
     )
     if profile.subsidiaries:
-        sub_names = [s.legal_name for s in profile.subsidiaries if s.legal_name]
-        guidance_lines.append(
-            f"- **Subsidiary names to search:** {', '.join(sub_names)}"
-        )
+        # Reuse the ranked list from corporate structure section
+        parent_jur_g = (profile.jurisdiction or "").upper()
+
+        def _sub_sort_key_g(s: Subsidiary) -> tuple:
+            has_ownership = s.ownership_percentage is not None
+            has_lei = bool(s.lei)
+            has_real_name = bool(s.legal_name) and not s.legal_name.startswith("UK Company ")
+            diff_jurisdiction = bool(s.jurisdiction) and s.jurisdiction.upper() != parent_jur_g
+            return (has_ownership, has_real_name, diff_jurisdiction, has_lei)
+
+        ranked_for_search = sorted(profile.subsidiaries, key=_sub_sort_key_g, reverse=True)
+        sub_names = [s.legal_name for s in ranked_for_search if s.legal_name][:_SUB_SAMPLE_SIZE]
+        if sub_names:
+            guidance_lines.append(
+                f"- **Subsidiary names to search:** {', '.join(sub_names)}"
+            )
     if profile.operating_countries:
         guidance_lines.append(
             f"- **Countries to focus on:** "
