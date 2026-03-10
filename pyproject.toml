@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Build rich company context documents from corp-graph Postgres"
 requires-python = ">=3.13"
 dependencies = [
-    "anthropic[bedrock]>=0.84.0",
     "psycopg[binary]>=3.2.0",
     "pycountry>=26.2.16",
     "pydantic>=2.12.0",
@@ -12,8 +11,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-openai = ["openai>=1.0"]
-bedrock = ["boto3>=1.35"]
+llm = ["openai>=1.0", "anthropic[bedrock]>=0.84.0"]
 
 [build-system]
 requires = ["hatchling"]

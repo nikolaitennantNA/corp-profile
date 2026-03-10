@@ -26,7 +26,7 @@ class OpenAIProvider:
         if OpenAI is None:
             raise ImportError(
                 "The 'openai' package is required for OpenAIProvider. "
-                "Install it with: uv sync --extra openai"
+                "Install it with: uv sync --extra llm"
             )
         self.model = model
         self.client = OpenAI()

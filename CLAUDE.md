@@ -4,66 +4,67 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-corp-profile builds rich company context documents from a corp-graph Postgres database, or from JSON files when the DB isn't available. It can optionally enrich profiles using LLMs. `CompanyProfile` is the local Pydantic view defined in this repo — not the `company_profiles` table in corp-graph, which is just one of the upstream data sources.
+corp-profile builds rich company context documents from a corp-graph Postgres database, or from JSON files when the DB isn't available. Output is structured markdown optimized for downstream LLM asset search pipelines. `CompanyProfile` is the local Pydantic view defined in this repo — not the `company_profiles` table in corp-graph, which is just one of the upstream data sources.
 
 ## Setup & Commands
 
 ```bash
 uv sync                                          # Install base dependencies
-uv sync --extra openai                            # Add OpenAI support
-uv sync --extra bedrock                           # Add Bedrock support
+uv sync --extra llm                               # Add LLM support (OpenAI + Bedrock)
 cp .env.example .env                              # Then edit with your config
 ```
 
 ```bash
-# CLI usage — all commands save markdown to outputs/
-python -m corp_profile build FR0000120271                              # Build from DB by ISIN/LEI/name
-python -m corp_profile build --from-file examples/totalenergies.json  # Build from JSON
+# CLI — all commands save markdown to outputs/
+python -m corp_profile build FR0000120271                              # Build from DB (ISIN, LEI, issuer_id, or name)
+python -m corp_profile build --from-file examples/totalenergies.json  # Build from JSON (no DB needed)
 python -m corp_profile build FR0000120271 -o out.json                 # Also save profile JSON
 python -m corp_profile build --from-file examples/totalenergies.json --llm        # + LLM enrichment
 python -m corp_profile build --from-file examples/totalenergies.json --llm --web  # + LLM + web search
+# --web implies --llm
 ```
 
 ```bash
 # Tests
-uv run pytest tests/ -v                           # Run all tests
-uv run pytest tests/test_profile_io.py -v         # Profile I/O tests only
-uv run pytest tests/test_llm.py -v                # LLM provider tests only
-uv run pytest tests/test_enrich.py -v             # Enrichment tests only
+uv run pytest tests/ -v                           # Run all tests (30 total)
+uv run pytest tests/test_profile_io.py -v         # Profile I/O round-trip tests
+uv run pytest tests/test_llm.py -v                # LLM provider tests
+uv run pytest tests/test_enrich.py -v             # Enrichment pipeline tests
+uv run pytest tests/test_demo.py -v -s            # Demo integration test (prints rendered output)
 uv run pytest tests/test_llm.py::TestOpenAIProvider -v  # Single test class
 ```
 
 ## Architecture
 
-```
-src/corp_profile/
-├── db.py            # get_connection() — psycopg dict-row connection via CORPGRAPH_DB_URL
-├── profile.py       # CompanyProfile model, build_profile(isin), build_profile_from_dict/file,
-│                    #   save_profile, build_context_document
-├── enrich.py        # EnrichConfig, enrich_profile() — two-stage LLM pipeline (clean → enrich)
-├── prompts.py       # System prompts for clean, enrich, and web search stages
-├── llm/
-│   ├── __init__.py  # LLMProvider protocol, parse_model_slug(), get_provider()
-│   ├── openai.py    # OpenAIProvider (Chat Completions + Responses API for web search)
-│   └── bedrock.py   # BedrockProvider (Converse API)
-└── __main__.py      # CLI: build, enrich subcommands
-```
+**Data flow:** Source (DB/JSON) → `CompanyProfile` → optional `enrich_profile()` → `build_context_document()` → markdown in `outputs/`
 
-**Data flow:** Data source (DB/JSON/dict) → `CompanyProfile` → optional `enrich_profile()` → `build_context_document()` → structured text
+**Data models** (`profile.py`): `CompanyProfile` contains typed sub-models — `Subsidiary`, `Asset`, `DiscoveredAsset`, `MaterialAssetType`. These are proper Pydantic models (not `list[dict]`) so they work with OpenAI's structured outputs.
 
-**LLM model slugs:** Provider-agnostic via `provider/model` format (e.g. `openai/gpt-5`, `bedrock/anthropic.claude-3-sonnet`). Parsed by `parse_model_slug()`, routed by `get_provider()`.
+**Entity resolution** (`profile.py:_resolve_entity`): Flexible 5-step lookup — ISIN on parent entity → ISIN via securities table → LEI → issuer_id → name/alias match → name prefix match.
 
-**Enrichment pipeline:** Two stages — clean & validate (fix names, normalize jurisdictions, dedup) then enrich (improve descriptions, add context). Optional web search stage between them (off by default, uses OpenAI Responses API).
+**LLM provider routing** (`llm/__init__.py`): Provider-agnostic slug format `provider/model` (e.g. `openai/gpt-5`, `bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0`). `parse_model_slug()` splits, `get_provider()` returns the right adapter.
+
+**Enrichment pipeline** (`enrich.py`): Three stages — clean (fix names, normalize jurisdictions, dedup) → optional web search (OpenAI Responses API only) → enrich (improve descriptions, add context). Each stage returns `{"profile": {...}, "changes": [...]}`.
+
+**Web search** uses `responses.parse()` with Pydantic `EnrichmentResponse` model for structured output — this works with web search tools unlike `json_object` mode which OpenAI blocks. Bedrock does not support web search.
+
+**Config precedence** (`EnrichConfig.load()`): env vars → `config.toml` → defaults. Secrets (API keys) stay in `.env`, app config in `config.toml`.
+
+**Lazy imports** (`__init__.py`): `EnrichConfig` and `enrich_profile` are lazy-loaded via `__getattr__` to avoid pulling in LLM dependencies when not needed.
+
+**Markdown renderer** (`build_context_document()`): Outputs sections optimized for asset search: Company Identity, Geographic Footprint, Corporate Structure, Asset Inventory (capped at 10 samples), Discovery Gaps, Search Guidance. Country codes resolved to full names via `pycountry`.
 
 ## Key Dependencies
 
 - Python >=3.13, managed with `uv`, built with `hatchling`
 - `psycopg[binary]` (Postgres driver, v3 API with dict row factory)
-- `pydantic` v2 (data model + config)
-- `python-dotenv` (env config)
-- Optional: `openai` (LLM enrichment), `boto3` (Bedrock enrichment)
+- `pydantic` v2 (data models, structured output schemas)
+- `pycountry` (ISO country code → name resolution)
+- `python-dotenv` (loaded at CLI startup in `__main__.py`)
+- Optional `[llm]` extra: `openai` (web search), `anthropic[bedrock]` (Bedrock LLM + boto3)
 
 ## Environment Variables
 
 - `CORPGRAPH_DB_URL` — Postgres connection string (required for DB mode)
-- `CORPPROFILE_LLM_MODEL` — LLM slug like `openai/gpt-5` (overrides config.toml for enrichment)
+- `CORPPROFILE_LLM_MODEL` — LLM slug (overrides `config.toml` `[llm].model`)
+- `OPENAI_API_KEY` — required for `--web` (loaded from `.env` via dotenv)
