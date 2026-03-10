@@ -12,18 +12,17 @@ from .llm import get_provider
 from .profile import CompanyProfile
 
 
-def _load_pyproject_config() -> dict:
-    """Load [tool.corp-profile] from pyproject.toml if it exists."""
+def _load_config() -> dict:
+    """Load config.toml from project root."""
     try:
         import tomllib
     except ModuleNotFoundError:
         import tomli as tomllib  # type: ignore[no-redef]
 
-    for candidate in [Path("pyproject.toml"), Path(__file__).resolve().parents[3] / "pyproject.toml"]:
+    for candidate in [Path("config.toml"), Path(__file__).resolve().parents[3] / "config.toml"]:
         if candidate.exists():
             with open(candidate, "rb") as f:
-                data = tomllib.load(f)
-            return data.get("tool", {}).get("corp-profile", {})
+                return tomllib.load(f)
     return {}
 
 
@@ -33,36 +32,57 @@ class EnrichConfig(BaseModel):
     model: str  # slug like "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
     web_search: bool = False
     web_search_model: str | None = None  # defaults to model if None
+    aws_region: str | None = None
+    aws_profile: str | None = None
 
     @classmethod
     def load(cls) -> EnrichConfig:
-        """Load config from pyproject.toml [tool.corp-profile], with env var overrides.
+        """Load config from config.toml, with env var overrides.
 
-        Priority: env vars > pyproject.toml > defaults.
-        Secrets (API keys) stay in .env. App config lives in pyproject.toml.
+        Priority: env vars > config.toml > defaults.
+        Secrets (API keys) stay in .env. App config lives in config.toml.
         """
-        pyproject = _load_pyproject_config()
+        cfg = _load_config()
+        llm = cfg.get("llm", {})
+        aws = cfg.get("aws", {})
 
-        model = os.environ.get("CORPPROFILE_LLM_MODEL") or pyproject.get("llm_model")
+        model = os.environ.get("CORPPROFILE_LLM_MODEL") or llm.get("model")
         if not model:
             raise RuntimeError(
-                "LLM model not configured. Set llm_model in [tool.corp-profile] "
-                "in pyproject.toml, or set CORPPROFILE_LLM_MODEL env var."
+                "LLM model not configured. Set model in [llm] in config.toml, "
+                "or set CORPPROFILE_LLM_MODEL env var."
             )
 
         web_search_env = os.environ.get("CORPPROFILE_WEB_SEARCH")
         if web_search_env is not None:
             web_search = web_search_env.lower() == "true"
         else:
-            web_search = bool(pyproject.get("web_search", False))
+            web_search = bool(llm.get("web_search", False))
 
         web_search_model = (
             os.environ.get("CORPPROFILE_WEB_SEARCH_MODEL")
-            or pyproject.get("web_search_model")
+            or llm.get("web_search_model")
             or None
         )
 
-        return cls(model=model, web_search=web_search, web_search_model=web_search_model)
+        aws_region = (
+            os.environ.get("AWS_DEFAULT_REGION")
+            or aws.get("region")
+            or None
+        )
+        aws_profile = (
+            os.environ.get("AWS_PROFILE")
+            or aws.get("profile")
+            or None
+        )
+
+        return cls(
+            model=model,
+            web_search=web_search,
+            web_search_model=web_search_model,
+            aws_region=aws_region,
+            aws_profile=aws_profile,
+        )
 
     @classmethod
     def from_env(cls) -> EnrichConfig:
@@ -80,7 +100,7 @@ def enrich_profile(
 
     Returns (enriched_profile, list_of_changes).
     """
-    provider = get_provider(config.model)
+    provider = get_provider(config.model, aws_region=config.aws_region, aws_profile=config.aws_profile)
     all_changes: list[str] = []
 
     def _apply_stage(
@@ -114,7 +134,7 @@ def enrich_profile(
     # Stage 2a (optional): Web search for structured discovery
     if config.web_search:
         search_slug = config.web_search_model or config.model
-        search_provider = get_provider(search_slug)
+        search_provider = get_provider(search_slug, aws_region=config.aws_region, aws_profile=config.aws_profile)
         search_messages = [
             {"role": "system", "content": prompts.WEB_SEARCH_ENRICH_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(profile.model_dump(), default=str)},

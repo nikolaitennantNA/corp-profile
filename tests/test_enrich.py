@@ -14,7 +14,7 @@ class TestEnrichConfig:
         config = EnrichConfig.from_env()
         assert config.model == "openai/gpt-5"
         assert config.web_search is False
-        # web_search_model comes from pyproject.toml if not set in env
+        # web_search_model comes from config.toml if not set in env
         assert config.web_search_model == "openai/gpt-4o"
 
     def test_from_env_with_search(self, monkeypatch):
@@ -26,13 +26,14 @@ class TestEnrichConfig:
         assert config.web_search is True
         assert config.web_search_model == "openai/gpt-4o"
 
-    def test_from_env_missing_falls_back_to_pyproject(self, monkeypatch):
+    def test_from_env_missing_falls_back_to_config_toml(self, monkeypatch):
         monkeypatch.delenv("CORPPROFILE_LLM_MODEL", raising=False)
-        # load() reads from pyproject.toml which has llm_model set
+        # load() reads from config.toml which has model set
         config = EnrichConfig.load()
         assert config.model == "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
+        assert config.aws_region == "us-east-2"
 
-    def test_env_overrides_pyproject(self, monkeypatch):
+    def test_env_overrides_config_toml(self, monkeypatch):
         monkeypatch.setenv("CORPPROFILE_LLM_MODEL", "openai/gpt-5")
         config = EnrichConfig.load()
         assert config.model == "openai/gpt-5"
@@ -84,7 +85,7 @@ class TestEnrichProfile:
         mock_main = self._make_mock_provider([clean_response, enrich_response])
         mock_search = self._make_mock_provider([search_response])
 
-        def pick_provider(slug):
+        def pick_provider(slug, **kwargs):
             if slug == "openai/gpt-4o":
                 return mock_search
             return mock_main

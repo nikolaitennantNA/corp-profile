@@ -20,8 +20,3 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
-
-[tool.corp-profile]
-llm_model = "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
-web_search = false
-web_search_model = "openai/gpt-4o"

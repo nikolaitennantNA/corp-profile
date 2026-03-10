@@ -11,14 +11,18 @@ except ImportError:  # pragma: no cover
 class BedrockProvider:
     """LLM provider using Amazon Bedrock Converse API."""
 
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, region: str | None = None, profile: str | None = None) -> None:
         if boto3 is None:
             raise ImportError(
                 "The 'boto3' package is required for BedrockProvider. "
                 "Install it with: uv sync --extra bedrock"
             )
         self.model = model
-        self.client = boto3.client("bedrock-runtime")
+        session = boto3.Session(
+            region_name=region,
+            profile_name=profile,
+        )
+        self.client = session.client("bedrock-runtime")
 
     def complete(
         self,

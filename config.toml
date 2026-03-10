@@ -1,0 +1,8 @@
+[llm]
+model = "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
+web_search = false
+web_search_model = "openai/gpt-4o"
+
+[aws]
+region = "us-east-2"
+# profile = "default"  # uses default profile (MFA session via aws-mfa)

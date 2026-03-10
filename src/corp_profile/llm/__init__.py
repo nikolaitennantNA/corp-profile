@@ -27,7 +27,7 @@ def parse_model_slug(slug: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
-def get_provider(slug: str) -> LLMProvider:
+def get_provider(slug: str, *, aws_region: str | None = None, aws_profile: str | None = None) -> LLMProvider:
     """Instantiate an LLMProvider from a model slug like 'openai/gpt-5'."""
     provider_name, model_name = parse_model_slug(slug)
     if provider_name == "openai":
@@ -35,6 +35,6 @@ def get_provider(slug: str) -> LLMProvider:
         return OpenAIProvider(model=model_name)
     elif provider_name == "bedrock":
         from .bedrock import BedrockProvider
-        return BedrockProvider(model=model_name)
+        return BedrockProvider(model=model_name, region=aws_region, profile=aws_profile)
     else:
         raise ValueError(f"Unknown provider: {provider_name}")

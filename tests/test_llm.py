@@ -106,7 +106,7 @@ class TestBedrockProvider:
         from corp_profile.llm.bedrock import BedrockProvider
 
         mock_client = MagicMock()
-        mock_boto3.client.return_value = mock_client
+        mock_boto3.Session.return_value.client.return_value = mock_client
         mock_client.converse.return_value = {
             "output": {
                 "message": {
@@ -127,7 +127,7 @@ class TestBedrockProvider:
         from corp_profile.llm.bedrock import BedrockProvider
 
         mock_client = MagicMock()
-        mock_boto3.client.return_value = mock_client
+        mock_boto3.Session.return_value.client.return_value = mock_client
         mock_client.converse.return_value = {
             "output": {"message": {"content": [{"text": "{}"}]}}
         }
@@ -148,7 +148,7 @@ class TestBedrockProvider:
         from corp_profile.llm.bedrock import BedrockProvider
         import pytest
 
-        mock_boto3.client.return_value = MagicMock()
+        mock_boto3.Session.return_value.client.return_value = MagicMock()
         provider = BedrockProvider(model="anthropic.claude-3-sonnet")
         with pytest.raises(NotImplementedError):
             provider.complete(
