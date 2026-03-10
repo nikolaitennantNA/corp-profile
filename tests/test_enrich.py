@@ -14,7 +14,8 @@ class TestEnrichConfig:
         config = EnrichConfig.from_env()
         assert config.model == "openai/gpt-5"
         assert config.web_search is False
-        assert config.web_search_model is None
+        # web_search_model comes from pyproject.toml if not set in env
+        assert config.web_search_model == "openai/gpt-4o"
 
     def test_from_env_with_search(self, monkeypatch):
         monkeypatch.setenv("CORPPROFILE_LLM_MODEL", "bedrock/anthropic.claude-3-sonnet")
@@ -25,11 +26,16 @@ class TestEnrichConfig:
         assert config.web_search is True
         assert config.web_search_model == "openai/gpt-4o"
 
-    def test_from_env_missing(self, monkeypatch):
+    def test_from_env_missing_falls_back_to_pyproject(self, monkeypatch):
         monkeypatch.delenv("CORPPROFILE_LLM_MODEL", raising=False)
-        import pytest
-        with pytest.raises(RuntimeError, match="CORPPROFILE_LLM_MODEL"):
-            EnrichConfig.from_env()
+        # load() reads from pyproject.toml which has llm_model set
+        config = EnrichConfig.load()
+        assert config.model == "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    def test_env_overrides_pyproject(self, monkeypatch):
+        monkeypatch.setenv("CORPPROFILE_LLM_MODEL", "openai/gpt-5")
+        config = EnrichConfig.load()
+        assert config.model == "openai/gpt-5"
 
     def test_direct_construction(self):
         config = EnrichConfig(model="openai/gpt-5")

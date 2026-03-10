@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 from pydantic import BaseModel
 
@@ -11,25 +12,62 @@ from .llm import get_provider
 from .profile import CompanyProfile
 
 
+def _load_pyproject_config() -> dict:
+    """Load [tool.corp-profile] from pyproject.toml if it exists."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib  # type: ignore[no-redef]
+
+    for candidate in [Path("pyproject.toml"), Path(__file__).resolve().parents[3] / "pyproject.toml"]:
+        if candidate.exists():
+            with open(candidate, "rb") as f:
+                data = tomllib.load(f)
+            return data.get("tool", {}).get("corp-profile", {})
+    return {}
+
+
 class EnrichConfig(BaseModel):
     """Configuration for LLM enrichment."""
 
-    model: str  # slug like "openai/gpt-5"
+    model: str  # slug like "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
     web_search: bool = False
     web_search_model: str | None = None  # defaults to model if None
 
     @classmethod
-    def from_env(cls) -> EnrichConfig:
-        """Load config from environment variables."""
-        model = os.environ.get("CORPPROFILE_LLM_MODEL")
+    def load(cls) -> EnrichConfig:
+        """Load config from pyproject.toml [tool.corp-profile], with env var overrides.
+
+        Priority: env vars > pyproject.toml > defaults.
+        Secrets (API keys) stay in .env. App config lives in pyproject.toml.
+        """
+        pyproject = _load_pyproject_config()
+
+        model = os.environ.get("CORPPROFILE_LLM_MODEL") or pyproject.get("llm_model")
         if not model:
             raise RuntimeError(
-                "CORPPROFILE_LLM_MODEL not set. "
-                "Set it to a slug like 'openai/gpt-5' or 'bedrock/anthropic.claude-3-sonnet'."
+                "LLM model not configured. Set llm_model in [tool.corp-profile] "
+                "in pyproject.toml, or set CORPPROFILE_LLM_MODEL env var."
             )
-        web_search = os.environ.get("CORPPROFILE_WEB_SEARCH", "false").lower() == "true"
-        web_search_model = os.environ.get("CORPPROFILE_WEB_SEARCH_MODEL") or None
+
+        web_search_env = os.environ.get("CORPPROFILE_WEB_SEARCH")
+        if web_search_env is not None:
+            web_search = web_search_env.lower() == "true"
+        else:
+            web_search = bool(pyproject.get("web_search", False))
+
+        web_search_model = (
+            os.environ.get("CORPPROFILE_WEB_SEARCH_MODEL")
+            or pyproject.get("web_search_model")
+            or None
+        )
+
         return cls(model=model, web_search=web_search, web_search_model=web_search_model)
+
+    @classmethod
+    def from_env(cls) -> EnrichConfig:
+        """Alias for load() — kept for backwards compatibility."""
+        return cls.load()
 
 
 from . import prompts
