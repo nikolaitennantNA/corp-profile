@@ -14,7 +14,8 @@ class CompanyProfile(BaseModel):
     legal_name: str
     lei: str | None = None
     jurisdiction: str | None = None
-    isin_list: list[str] = []
+    isin_list: list[str] = []          # parent entity ISINs
+    all_isins: list[str] = []          # parent + all subsidiary ISINs
     aliases: list[str] = []
     description: str = ""
     primary_industry: str = ""
@@ -32,7 +33,7 @@ def build_profile(isin: str) -> CompanyProfile:
     with get_connection() as conn:
         # 1. Main entity from company_universe
         row = conn.execute(
-            "SELECT * FROM company_universe WHERE isin_list @> ARRAY[%s]::text[]",
+            "SELECT * FROM company_universe WHERE isin_list @> ARRAY[%s]::varchar[]",
             [isin],
         ).fetchone()
         if not row:
@@ -46,12 +47,23 @@ def build_profile(isin: str) -> CompanyProfile:
             lei=row.get("lei"),
             jurisdiction=row.get("jurisdiction"),
             isin_list=row.get("isin_list") or [],
-            aliases=row.get("aliases") or [],
+            aliases=row.get("alias_list") or [],
             description=row.get("description") or "",
             primary_industry=row.get("primary_industry") or "",
             operating_countries=row.get("operating_countries") or [],
             business_segments=row.get("business_segments") or [],
         )
+
+        # Prefer company_profiles name over issuers.legal_name (which may be
+        # corrupted by GLEIF alias-match name adoption)
+        cp_row = conn.execute(
+            "SELECT company_name, official_name FROM company_profiles WHERE issuer_id = %s",
+            [issuer_id],
+        ).fetchone()
+        if cp_row:
+            better_name = cp_row.get("official_name") or cp_row.get("company_name")
+            if better_name:
+                profile.legal_name = better_name
 
         # 2. Subsidiary tree
         subs = conn.execute(
@@ -64,7 +76,36 @@ def build_profile(isin: str) -> CompanyProfile:
             """,
             [issuer_id],
         ).fetchall()
-        profile.subsidiaries = [dict(s) for s in subs]
+        # Dedup subsidiaries by name (case-insensitive), prefer entry with LEI
+        seen: dict[str, dict] = {}
+        for s in subs:
+            d = dict(s)
+            key = (d.get("legal_name") or "").strip().upper()
+            if not key:
+                continue
+            existing = seen.get(key)
+            if existing is None:
+                seen[key] = d
+            elif d.get("lei") and not existing.get("lei"):
+                seen[key] = d
+        profile.subsidiaries = list(seen.values())
+
+        # 2b. Aggregate ISINs from parent + all subsidiaries
+        sub_ids = [s["issuer_id"] for s in profile.subsidiaries if s.get("issuer_id")]
+        all_ids = [issuer_id] + sub_ids
+        if all_ids:
+            placeholders = ",".join(["%s"] * len(all_ids))
+            sub_isins = conn.execute(
+                f"""
+                SELECT DISTINCT isin FROM securities
+                WHERE issuer_id IN ({placeholders}) AND isin IS NOT NULL
+                ORDER BY isin
+                """,
+                all_ids,
+            ).fetchall()
+            profile.all_isins = sorted(
+                set(profile.isin_list) | {r["isin"] for r in sub_isins}
+            )
 
         # 3. Existing assets from ALD
         assets = conn.execute(
@@ -75,7 +116,17 @@ def build_profile(isin: str) -> CompanyProfile:
             """,
             [issuer_id],
         ).fetchall()
-        profile.existing_assets = [dict(a) for a in assets]
+        # Filter out unnamed assets that duplicate a named one at the same address
+        all_assets = [dict(a) for a in assets]
+        named = {
+            a["address"][:40]
+            for a in all_assets
+            if a.get("asset_name") and a.get("address")
+        }
+        profile.existing_assets = [
+            a for a in all_assets
+            if a.get("asset_name") or a.get("address", "")[:40] not in named
+        ]
 
         # 4. Company profile (enriched)
         cp = conn.execute(
@@ -122,6 +173,11 @@ def build_profile(isin: str) -> CompanyProfile:
     return profile
 
 
+def build_profile_from_dict(data: dict) -> CompanyProfile:
+    """Build a CompanyProfile from a plain dict (no DB required)."""
+    return CompanyProfile.model_validate(data)
+
+
 def build_context_document(profile: CompanyProfile) -> str:
     """Render a CompanyProfile as a structured text document for LLM consumption."""
     sections: list[str] = []
@@ -132,7 +188,9 @@ def build_context_document(profile: CompanyProfile) -> str:
         overview_lines.append(f"LEI: {profile.lei}")
     if profile.jurisdiction:
         overview_lines.append(f"Jurisdiction: {profile.jurisdiction}")
-    if profile.isin_list:
+    if profile.all_isins:
+        overview_lines.append(f"ISINs: {', '.join(profile.all_isins)}")
+    elif profile.isin_list:
         overview_lines.append(f"ISINs: {', '.join(profile.isin_list)}")
     if profile.aliases:
         overview_lines.append(f"Also known as: {', '.join(profile.aliases)}")
@@ -168,26 +226,45 @@ def build_context_document(profile: CompanyProfile) -> str:
             sub_lines.append(" ".join(parts))
         sections.append("\n".join(sub_lines))
 
-    # Existing Known Assets
+    # Existing Known Assets — aggregate by type, show sample
     if profile.existing_assets:
-        asset_lines = [f"\n## Existing Known Assets ({len(profile.existing_assets)})"]
+        # Group by asset type
+        by_type: dict[str, list[dict]] = {}
         for a in profile.existing_assets:
-            name = a.get("asset_name", "Unknown")
-            atype = a.get("naturesense_asset_type", "")
-            addr = a.get("address", "")
-            status = a.get("status", "")
-            cap = a.get("capacity")
-            units = a.get("capacity_units", "")
-            parts = [f"- {name}"]
-            if atype:
-                parts.append(f"[{atype}]")
-            if addr:
-                parts.append(f"at {addr}")
-            if status:
-                parts.append(f"({status})")
-            if cap is not None:
-                parts.append(f"- capacity: {cap} {units}".strip())
-            asset_lines.append(" ".join(parts))
+            atype = a.get("naturesense_asset_type") or "Unknown"
+            by_type.setdefault(atype, []).append(a)
+
+        total = len(profile.existing_assets)
+        named = [a for a in profile.existing_assets if a.get("asset_name")]
+        unnamed = total - len(named)
+
+        asset_lines = [f"\n## Existing Known Assets ({total} total, {len(named)} named)"]
+
+        # Type breakdown
+        asset_lines.append("Type breakdown:")
+        for atype, items in sorted(by_type.items(), key=lambda x: -len(x[1])):
+            asset_lines.append(f"  - {atype}: {len(items)}")
+
+        # Sample of named assets (max 30)
+        if named:
+            sample = named[:30]
+            asset_lines.append(f"\nSample assets ({len(sample)} of {len(named)} named):")
+            for a in sample:
+                name = a.get("asset_name", "")
+                atype = a.get("naturesense_asset_type", "")
+                addr = a.get("address", "")
+                status = a.get("status", "")
+                parts = [f"- {name}"]
+                if atype:
+                    parts.append(f"[{atype}]")
+                if addr:
+                    parts.append(f"at {addr}")
+                if status:
+                    parts.append(f"({status})")
+                asset_lines.append(" ".join(parts))
+            if len(named) > 30:
+                asset_lines.append(f"  ... and {len(named) - 30} more")
+
         sections.append("\n".join(asset_lines))
 
     # Previously Discovered Assets
