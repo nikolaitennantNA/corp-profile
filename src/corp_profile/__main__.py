@@ -23,7 +23,10 @@ def main() -> None:
     # build command
     build_cmd = sub.add_parser("build", help="Build a company profile")
     build_source = build_cmd.add_mutually_exclusive_group(required=True)
-    build_source.add_argument("--isin", help="ISIN to look up in corp-graph DB")
+    build_source.add_argument(
+        "identifier", nargs="?", default=None,
+        help="ISIN, LEI, issuer_id, or company name to look up in corp-graph DB",
+    )
     build_source.add_argument("--from-file", help="Load profile from JSON file")
     build_cmd.add_argument(
         "-o", "--output", help="Save profile JSON to file instead of printing"
@@ -46,7 +49,7 @@ def main() -> None:
             if args.from_file:
                 profile = build_profile_from_file(args.from_file)
             else:
-                profile = build_profile(args.isin)
+                profile = build_profile(args.identifier)
         except LookupError as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)

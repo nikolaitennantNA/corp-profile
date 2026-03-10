@@ -31,16 +31,64 @@ class CompanyProfile(BaseModel):
     material_asset_types: list[dict] = []
 
 
-def build_profile(isin: str) -> CompanyProfile:
-    """Query corp-graph Postgres and build a CompanyProfile for the given ISIN."""
+def _resolve_entity(conn, identifier: str) -> dict:
+    """Try to find an entity in company_universe by any identifier.
+
+    Attempts in order: ISIN, LEI, issuer_id, then name (case-insensitive).
+    """
+    # 1. ISIN (array contains)
+    row = conn.execute(
+        "SELECT * FROM company_universe WHERE isin_list @> ARRAY[%s]::varchar[]",
+        [identifier],
+    ).fetchone()
+    if row:
+        return dict(row)
+
+    # 2. LEI (exact match)
+    row = conn.execute(
+        "SELECT * FROM company_universe WHERE lei = %s",
+        [identifier],
+    ).fetchone()
+    if row:
+        return dict(row)
+
+    # 3. issuer_id (exact match)
+    row = conn.execute(
+        "SELECT * FROM company_universe WHERE issuer_id = %s",
+        [identifier],
+    ).fetchone()
+    if row:
+        return dict(row)
+
+    # 4. Name (case-insensitive, exact then ILIKE prefix)
+    row = conn.execute(
+        "SELECT * FROM company_universe WHERE UPPER(legal_name) = UPPER(%s)",
+        [identifier],
+    ).fetchone()
+    if row:
+        return dict(row)
+
+    row = conn.execute(
+        "SELECT * FROM company_universe WHERE legal_name ILIKE %s LIMIT 1",
+        [f"{identifier}%"],
+    ).fetchone()
+    if row:
+        return dict(row)
+
+    raise LookupError(
+        f"No entity found for '{identifier}'. "
+        "Tried matching as ISIN, LEI, issuer_id, and company name."
+    )
+
+
+def build_profile(identifier: str) -> CompanyProfile:
+    """Query corp-graph Postgres and build a CompanyProfile.
+
+    Accepts any identifier: ISIN, LEI, issuer_id, or company name.
+    """
     with get_connection() as conn:
-        # 1. Main entity from company_universe
-        row = conn.execute(
-            "SELECT * FROM company_universe WHERE isin_list @> ARRAY[%s]::varchar[]",
-            [isin],
-        ).fetchone()
-        if not row:
-            raise LookupError(f"No entity found for ISIN {isin}")
+        # 1. Resolve entity from company_universe
+        row = _resolve_entity(conn, identifier)
 
         issuer_id = row["issuer_id"]
 
