@@ -10,6 +10,7 @@ from .profile import (
     build_profile,
     build_profile_from_file,
     save_profile,
+    save_profile_markdown,
 )
 
 
@@ -60,6 +61,9 @@ def main() -> None:
         if args.output:
             save_profile(profile, args.output)
             print(f"Profile saved to {args.output}", file=sys.stderr)
+        elif args.enrich:
+            out_path = save_profile_markdown(profile)
+            print(f"Saved to {out_path}", file=sys.stderr)
         else:
             print(build_context_document(profile))
 
@@ -67,11 +71,8 @@ def main() -> None:
         profile = build_profile_from_file(args.file)
         profile = _run_enrich(profile)
 
-        if args.output:
-            save_profile(profile, args.output)
-            print(f"Enriched profile saved to {args.output}", file=sys.stderr)
-        else:
-            print(build_context_document(profile))
+        out_path = save_profile_markdown(profile, args.output)
+        print(f"Saved to {out_path}", file=sys.stderr)
 
     else:
         parser.print_help()

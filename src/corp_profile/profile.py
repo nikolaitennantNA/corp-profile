@@ -250,11 +250,34 @@ def build_profile_from_dict(data: dict) -> CompanyProfile:
     return CompanyProfile.model_validate(data)
 
 
+def profile_filename(profile: CompanyProfile) -> str:
+    """Generate a filename from the profile: 'Company Name (IDENTIFIER)'."""
+    import re
+    name = profile.legal_name
+    # Pick best identifier: first ISIN, then LEI, then issuer_id
+    identifier = (
+        (profile.isin_list[0] if profile.isin_list else None)
+        or profile.lei
+        or profile.issuer_id
+    )
+    base = f"{name} ({identifier})" if identifier else name
+    # Sanitize for filesystem
+    return re.sub(r'[<>:"/\\|?*]', '_', base)
+
+
 def save_profile(profile: CompanyProfile, path: str) -> None:
     """Save a CompanyProfile to a JSON file."""
     Path(path).write_text(
         json.dumps(profile.model_dump(), indent=2, default=str)
     )
+
+
+def save_profile_markdown(profile: CompanyProfile, path: str | None = None) -> str:
+    """Save the rendered context document as markdown. Returns the path used."""
+    if path is None:
+        path = f"{profile_filename(profile)}.md"
+    Path(path).write_text(build_context_document(profile))
+    return path
 
 
 def build_profile_from_file(path: str) -> CompanyProfile:
