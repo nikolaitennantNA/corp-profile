@@ -51,7 +51,7 @@ LLM always returns JSON matching `CompanyProfile` schema, validated back into th
 
 ```python
 class LLMProvider(Protocol):
-    def complete(self, messages: list[dict], json_mode: bool = False) -> str: ...
+    def complete(self, messages: list[dict], json_mode: bool = False, web_search: bool = False) -> str: ...
 ```
 
 Implementations for OpenAI and Bedrock. Provider selected by slug prefix.
