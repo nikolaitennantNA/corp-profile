@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from pydantic import BaseModel
 
 from .db import get_connection
@@ -176,6 +179,22 @@ def build_profile(isin: str) -> CompanyProfile:
 def build_profile_from_dict(data: dict) -> CompanyProfile:
     """Build a CompanyProfile from a plain dict (no DB required)."""
     return CompanyProfile.model_validate(data)
+
+
+def save_profile(profile: CompanyProfile, path: str) -> None:
+    """Save a CompanyProfile to a JSON file."""
+    Path(path).write_text(
+        json.dumps(profile.model_dump(), indent=2, default=str)
+    )
+
+
+def build_profile_from_file(path: str) -> CompanyProfile:
+    """Load a CompanyProfile from a JSON file."""
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Profile file not found: {path}")
+    data = json.loads(p.read_text())
+    return build_profile_from_dict(data)
 
 
 def build_context_document(profile: CompanyProfile) -> str:
