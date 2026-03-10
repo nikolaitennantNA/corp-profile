@@ -135,12 +135,19 @@ def test_demo_build_and_render():
     print("=" * 70)
 
     assert "# TotalEnergies SE" in doc
-    assert "LEI: 529900S21EQ1BO4ESM68" in doc
-    assert "Subsidiaries (3)" in doc
+    assert "Profile generated:" in doc
+    assert "**LEI:** 529900S21EQ1BO4ESM68" in doc
+    assert "Corporate Structure (3 subsidiaries)" in doc
     assert "SunPower Corporation" in doc
     assert "Donges Refinery" in doc
     assert "Seagreen Offshore Wind Farm" in doc
-    assert "Estimated total assets: 3200" in doc
+    assert "Estimated total:** 3200 assets" in doc
+    # Country names resolved from codes
+    assert "France" in doc
+    assert "Nigeria" in doc
+    # Discovery gaps
+    assert "Discovery Gaps" in doc
+    assert "Oil Production Platform: 0 of ~85 known" in doc
 
 
 def test_demo_save_and_reload(tmp_path):

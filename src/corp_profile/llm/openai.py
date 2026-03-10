@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+from pydantic import BaseModel
+
 try:
     from openai import OpenAI
 except ImportError:  # pragma: no cover
     OpenAI = None  # type: ignore[assignment,misc]
+
+from ..profile import CompanyProfile
+
+
+class EnrichmentResponse(BaseModel):
+    """Expected response shape from all enrichment stages."""
+
+    profile: CompanyProfile
+    changes: list[str] = []
 
 
 class OpenAIProvider:
@@ -39,19 +50,19 @@ class OpenAIProvider:
     def _complete_with_search(
         self, messages: list[dict], json_mode: bool
     ) -> str:
-        """Use OpenAI Responses API with web search tool."""
+        """Use OpenAI Responses API with web search tool.
+
+        Uses responses.parse() with a Pydantic model for structured output.
+        This works with web search (unlike json_object mode which OpenAI blocks).
+        The SDK handles schema generation with additionalProperties automatically.
+        """
         kwargs: dict = {
             "model": self.model,
             "input": messages,
             "tools": [{"type": "web_search_preview"}],
         }
         if json_mode:
-            kwargs["text"] = {"format": {"type": "json_object"}}
+            kwargs["text_format"] = EnrichmentResponse
 
-        response = self.client.responses.create(**kwargs)
-        for item in response.output:
-            if item.type == "message":
-                for content in item.content:
-                    if content.type == "output_text":
-                        return content.text
-        return ""
+        response = self.client.responses.parse(**kwargs)
+        return response.output_text

@@ -16,13 +16,12 @@ cp .env.example .env                              # Then edit with your config
 ```
 
 ```bash
-# CLI usage
-python -m corp_profile build --isin <ISIN>                    # Build from DB
-python -m corp_profile build --from-file profile.json         # Build from JSON
-python -m corp_profile build --isin <ISIN> -o out.json        # Save profile JSON
-python -m corp_profile build --from-file in.json --enrich     # Build + LLM enrich
-python -m corp_profile enrich profile.json                    # Enrich existing JSON
-python -m corp_profile enrich profile.json -o enriched.json   # Enrich and save
+# CLI usage — all commands save markdown to outputs/
+python -m corp_profile build FR0000120271                              # Build from DB by ISIN/LEI/name
+python -m corp_profile build --from-file examples/totalenergies.json  # Build from JSON
+python -m corp_profile build FR0000120271 -o out.json                 # Also save profile JSON
+python -m corp_profile build --from-file examples/totalenergies.json --llm        # + LLM enrichment
+python -m corp_profile build --from-file examples/totalenergies.json --llm --web  # + LLM + web search
 ```
 
 ```bash
@@ -67,6 +66,4 @@ src/corp_profile/
 ## Environment Variables
 
 - `CORPGRAPH_DB_URL` — Postgres connection string (required for DB mode)
-- `CORPPROFILE_LLM_MODEL` — LLM slug like `openai/gpt-5` (required for enrichment)
-- `CORPPROFILE_WEB_SEARCH` — `true`/`false` (default `false`)
-- `CORPPROFILE_WEB_SEARCH_MODEL` — Override slug for web search (defaults to main model)
+- `CORPPROFILE_LLM_MODEL` — LLM slug like `openai/gpt-5` (overrides config.toml for enrichment)

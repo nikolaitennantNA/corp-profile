@@ -1,13 +1,55 @@
-"""Build rich company context documents from corp-graph Postgres."""
+"""Build rich company context documents from corp-graph or JSON files."""
 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from pydantic import BaseModel
 
 from .db import get_connection
+
+
+class Subsidiary(BaseModel):
+    """A subsidiary or child entity in the corporate structure."""
+
+    issuer_id: str | None = None
+    legal_name: str = ""
+    jurisdiction: str = ""
+    lei: str | None = None
+    ownership_percentage: float | None = None
+    rel_type: str = ""
+
+
+class Asset(BaseModel):
+    """A known physical asset from the ALD database."""
+
+    asset_name: str = ""
+    address: str = ""
+    latitude: float | None = None
+    longitude: float | None = None
+    naturesense_asset_type: str = ""
+    capacity: float | None = None
+    capacity_units: str = ""
+    status: str = ""
+
+
+class DiscoveredAsset(BaseModel):
+    """An asset found during a previous search/discovery run."""
+
+    asset_name: str = ""
+    asset_type: str = ""
+    address: str = ""
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class MaterialAssetType(BaseModel):
+    """An expected asset type with optional estimated count."""
+
+    type: str = ""
+    count: int | None = None
 
 
 class CompanyProfile(BaseModel):
@@ -24,11 +66,11 @@ class CompanyProfile(BaseModel):
     primary_industry: str = ""
     operating_countries: list[str] = []
     business_segments: list[str] = []
-    subsidiaries: list[dict] = []
-    existing_assets: list[dict] = []
-    discovered_assets: list[dict] = []
+    subsidiaries: list[Subsidiary] = []
+    existing_assets: list[Asset] = []
+    discovered_assets: list[DiscoveredAsset] = []
     estimated_asset_count: int | None = None
-    material_asset_types: list[dict] = []
+    material_asset_types: list[MaterialAssetType] = []
 
 
 def _resolve_entity(conn, identifier: str) -> dict:
@@ -163,7 +205,7 @@ def build_profile(identifier: str) -> CompanyProfile:
         profile.subsidiaries = list(seen.values())
 
         # 2b. Aggregate ISINs from parent + all subsidiaries
-        sub_ids = [s["issuer_id"] for s in profile.subsidiaries if s.get("issuer_id")]
+        sub_ids = [s.issuer_id for s in profile.subsidiaries if s.issuer_id]
         all_ids = [issuer_id] + sub_ids
         if all_ids:
             placeholders = ",".join(["%s"] * len(all_ids))
@@ -251,7 +293,7 @@ def build_profile_from_dict(data: dict) -> CompanyProfile:
 
 
 def profile_filename(profile: CompanyProfile) -> str:
-    """Generate a filename from the profile: 'Company Name (IDENTIFIER)'."""
+    """Generate a filename from the profile: 'Company_Name_(IDENTIFIER)'."""
     import re
     name = profile.legal_name
     # Pick best identifier: first ISIN, then LEI, then issuer_id
@@ -260,9 +302,9 @@ def profile_filename(profile: CompanyProfile) -> str:
         or profile.lei
         or profile.issuer_id
     )
-    base = f"{name} ({identifier})" if identifier else name
-    # Sanitize for filesystem
-    return re.sub(r'[<>:"/\\|?*]', '_', base)
+    base = f"{name}_({identifier})" if identifier else name
+    # Sanitize for filesystem: replace spaces and illegal chars with underscores
+    return re.sub(r'[<>:"/\\|?*\s]+', '_', base).strip("_")
 
 
 def save_profile(profile: CompanyProfile, path: str) -> None:
@@ -273,9 +315,11 @@ def save_profile(profile: CompanyProfile, path: str) -> None:
 
 
 def save_profile_markdown(profile: CompanyProfile, path: str | None = None) -> str:
-    """Save the rendered context document as markdown. Returns the path used."""
+    """Save the rendered context document as markdown to outputs/. Returns the path used."""
     if path is None:
-        path = f"{profile_filename(profile)}.md"
+        out_dir = Path("outputs")
+        out_dir.mkdir(exist_ok=True)
+        path = str(out_dir / f"{profile_filename(profile)}.md")
     Path(path).write_text(build_context_document(profile))
     return path
 
@@ -289,126 +333,203 @@ def build_profile_from_file(path: str) -> CompanyProfile:
     return build_profile_from_dict(data)
 
 
+_ASSET_SAMPLE_SIZE = 10
+
+def _country_name(code: str) -> str:
+    """Resolve an ISO country code to its full name via pycountry, falling back to the code."""
+    import pycountry
+
+    country = pycountry.countries.get(alpha_2=code.upper())
+    return country.name if country else code
+
+
 def build_context_document(profile: CompanyProfile) -> str:
-    """Render a CompanyProfile as a structured text document for LLM consumption."""
+    """Render a CompanyProfile as a structured markdown document for LLM consumption.
+
+    Optimized for asset search pipelines: emphasizes company identity, geographic
+    footprint, asset type patterns, and naming conventions to guide discovery.
+    """
     sections: list[str] = []
 
-    # Company Overview
-    overview_lines = [f"# {profile.legal_name}"]
+    # --- Company Identity ---
+    id_lines = [f"# {profile.legal_name}"]
+    id_lines.append(f"*Profile generated: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}*")
+    meta: list[str] = []
     if profile.lei:
-        overview_lines.append(f"LEI: {profile.lei}")
+        meta.append(f"**LEI:** {profile.lei}")
     if profile.jurisdiction:
-        overview_lines.append(f"Jurisdiction: {profile.jurisdiction}")
-    if profile.all_isins:
-        overview_lines.append(f"ISINs: {', '.join(profile.all_isins)}")
-    elif profile.isin_list:
-        overview_lines.append(f"ISINs: {', '.join(profile.isin_list)}")
-    if profile.aliases:
-        overview_lines.append(f"Also known as: {', '.join(profile.aliases)}")
+        meta.append(f"**Jurisdiction:** {profile.jurisdiction}")
     if profile.primary_industry:
-        overview_lines.append(f"Industry: {profile.primary_industry}")
+        meta.append(f"**Industry:** {profile.primary_industry}")
+    if meta:
+        id_lines.append(" | ".join(meta))
+    if profile.all_isins:
+        id_lines.append(f"**ISINs:** {', '.join(profile.all_isins)}")
+    elif profile.isin_list:
+        id_lines.append(f"**ISINs:** {', '.join(profile.isin_list)}")
+    if profile.aliases:
+        id_lines.append(f"**Also known as:** {', '.join(profile.aliases)}")
     if profile.description:
-        overview_lines.append(f"\n{profile.description}")
-    if profile.operating_countries:
-        overview_lines.append(
-            f"Operating countries: {', '.join(profile.operating_countries)}"
-        )
-    if profile.business_segments:
-        overview_lines.append(
-            f"Business segments: {', '.join(profile.business_segments)}"
-        )
-    sections.append("\n".join(overview_lines))
+        id_lines.append(f"\n{profile.description}")
+    sections.append("\n".join(id_lines))
 
-    # Subsidiaries
+    # --- Geographic Footprint ---
+    if profile.operating_countries or profile.business_segments:
+        geo_lines = ["\n## Geographic & Operational Footprint"]
+        if profile.operating_countries:
+            country_names = [_country_name(c) for c in profile.operating_countries]
+            geo_lines.append(
+                f"**Operating countries ({len(profile.operating_countries)}):** "
+                + ", ".join(country_names)
+            )
+        if profile.business_segments:
+            geo_lines.append(
+                f"**Business segments:** {', '.join(profile.business_segments)}"
+            )
+        sections.append("\n".join(geo_lines))
+
+    # --- Corporate Structure ---
     if profile.subsidiaries:
-        sub_lines = [f"\n## Subsidiaries ({len(profile.subsidiaries)})"]
+        sub_lines = [f"\n## Corporate Structure ({len(profile.subsidiaries)} subsidiaries)"]
         for s in profile.subsidiaries:
-            name = s.get("legal_name", "Unknown")
-            jur = s.get("jurisdiction", "")
-            lei = s.get("lei", "")
-            pct = s.get("ownership_percentage")
-            parts = [f"- {name}"]
-            if jur:
-                parts.append(f"({jur})")
-            if lei:
-                parts.append(f"[LEI: {lei}]")
-            if pct is not None:
-                parts.append(f"- {pct}% owned")
+            parts = [f"- **{s.legal_name or 'Unknown'}**"]
+            if s.jurisdiction:
+                parts.append(f"({_country_name(s.jurisdiction)})")
+            if s.ownership_percentage is not None:
+                parts.append(f"— {s.ownership_percentage}% owned")
+            if s.lei:
+                parts.append(f"[LEI: {s.lei}]")
             sub_lines.append(" ".join(parts))
         sections.append("\n".join(sub_lines))
 
-    # Existing Known Assets — aggregate by type, show sample
-    if profile.existing_assets:
-        # Group by asset type
-        by_type: dict[str, list[dict]] = {}
-        for a in profile.existing_assets:
-            atype = a.get("naturesense_asset_type") or "Unknown"
-            by_type.setdefault(atype, []).append(a)
+    # --- Asset Inventory ---
+    # Combines known assets, discovered assets, and estimates into one section
+    # focused on what an asset search pipeline needs to know.
+    has_assets = (
+        profile.existing_assets
+        or profile.discovered_assets
+        or profile.estimated_asset_count is not None
+        or profile.material_asset_types
+    )
+    if has_assets:
+        asset_lines = ["\n## Asset Inventory"]
 
-        total = len(profile.existing_assets)
-        named = [a for a in profile.existing_assets if a.get("asset_name")]
-        unnamed = total - len(named)
+        # Summary stats
+        known_count = len(profile.existing_assets)
+        discovered_count = len(profile.discovered_assets)
+        if profile.estimated_asset_count is not None:
+            asset_lines.append(
+                f"**Estimated total:** {profile.estimated_asset_count} assets"
+            )
+        if known_count:
+            asset_lines.append(f"**Known (verified):** {known_count}")
+        if discovered_count:
+            asset_lines.append(f"**Previously discovered:** {discovered_count}")
 
-        asset_lines = [f"\n## Existing Known Assets ({total} total, {len(named)} named)"]
+        # Material asset types (what to search for)
+        if profile.material_asset_types:
+            asset_lines.append("\n### Expected Asset Types")
+            for t in profile.material_asset_types:
+                if t.count is not None:
+                    asset_lines.append(f"- {t.type or 'Unknown'}: ~{t.count}")
+                else:
+                    asset_lines.append(f"- {t.type or 'Unknown'}")
 
-        # Type breakdown
-        asset_lines.append("Type breakdown:")
-        for atype, items in sorted(by_type.items(), key=lambda x: -len(x[1])):
-            asset_lines.append(f"  - {atype}: {len(items)}")
+        # Known asset type breakdown
+        if profile.existing_assets:
+            by_type: dict[str, list[Asset]] = {}
+            for a in profile.existing_assets:
+                atype = a.naturesense_asset_type or "Unknown"
+                by_type.setdefault(atype, []).append(a)
 
-        # Sample of named assets (max 30)
-        if named:
-            sample = named[:30]
-            asset_lines.append(f"\nSample assets ({len(sample)} of {len(named)} named):")
-            for a in sample:
-                name = a.get("asset_name", "")
-                atype = a.get("naturesense_asset_type", "")
-                addr = a.get("address", "")
-                status = a.get("status", "")
-                parts = [f"- {name}"]
-                if atype:
-                    parts.append(f"[{atype}]")
-                if addr:
-                    parts.append(f"at {addr}")
-                if status:
-                    parts.append(f"({status})")
+            asset_lines.append("\n### Known Asset Type Breakdown")
+            for atype, items in sorted(by_type.items(), key=lambda x: -len(x[1])):
+                asset_lines.append(f"- {atype}: {len(items)}")
+
+            # Sample of named assets to show naming/location patterns
+            named = [a for a in profile.existing_assets if a.asset_name]
+            if named:
+                sample = named[:_ASSET_SAMPLE_SIZE]
+                asset_lines.append(
+                    f"\n### Sample Known Assets ({len(sample)} of {len(named)} named)"
+                )
+                for a in sample:
+                    parts = [f"- **{a.asset_name}**"]
+                    if a.naturesense_asset_type:
+                        parts.append(f"[{a.naturesense_asset_type}]")
+                    if a.address:
+                        parts.append(f"— {a.address}")
+                    if a.status:
+                        parts.append(f"({a.status})")
+                    asset_lines.append(" ".join(parts))
+
+        # Previously discovered assets (so the pipeline doesn't re-discover them)
+        if profile.discovered_assets:
+            sample_disc = profile.discovered_assets[:_ASSET_SAMPLE_SIZE]
+            asset_lines.append(
+                f"\n### Previously Discovered ({discovered_count} total, "
+                f"showing {len(sample_disc)})"
+            )
+            asset_lines.append(
+                "These assets were found in prior searches — skip during new discovery."
+            )
+            for d in sample_disc:
+                parts = [f"- **{d.asset_name or 'Unknown'}**"]
+                if d.asset_type:
+                    parts.append(f"[{d.asset_type}]")
+                if d.address:
+                    parts.append(f"— {d.address}")
                 asset_lines.append(" ".join(parts))
-            if len(named) > 30:
-                asset_lines.append(f"  ... and {len(named) - 30} more")
 
         sections.append("\n".join(asset_lines))
 
-    # Previously Discovered Assets
-    if profile.discovered_assets:
-        disc_lines = [
-            f"\n## Previously Discovered Assets ({len(profile.discovered_assets)})"
-        ]
-        for d in profile.discovered_assets:
-            name = d.get("asset_name", "Unknown")
-            atype = d.get("asset_type", "")
-            addr = d.get("address", "")
-            parts = [f"- {name}"]
-            if atype:
-                parts.append(f"[{atype}]")
-            if addr:
-                parts.append(f"at {addr}")
-            disc_lines.append(" ".join(parts))
-        sections.append("\n".join(disc_lines))
+    # --- Discovery Gaps ---
+    # Show where estimated counts exceed known counts by asset type
+    if profile.material_asset_types and profile.existing_assets:
+        by_type_count: dict[str, int] = {}
+        for a in profile.existing_assets:
+            atype = a.naturesense_asset_type or "Unknown"
+            by_type_count[atype] = by_type_count.get(atype, 0) + 1
 
-    # Asset Estimates
-    if profile.estimated_asset_count is not None or profile.material_asset_types:
-        est_lines = ["\n## Asset Estimates"]
-        if profile.estimated_asset_count is not None:
-            est_lines.append(
-                f"Estimated total assets: {profile.estimated_asset_count}"
+        gaps: list[str] = []
+        for t in profile.material_asset_types:
+            if t.type and t.count is not None:
+                known = by_type_count.get(t.type, 0)
+                if t.count > known:
+                    gaps.append(f"- {t.type}: {known} of ~{t.count} known")
+
+        if gaps:
+            gap_lines = ["\n## Discovery Gaps"]
+            gap_lines.append("Asset types where known count is below estimated:")
+            gap_lines.extend(gaps)
+            sections.append("\n".join(gap_lines))
+
+    # --- Search Guidance ---
+    # Hints for the asset search pipeline
+    guidance_lines = ["\n## Search Guidance"]
+    guidance_lines.append(
+        "When searching for assets owned by this company, consider:"
+    )
+    search_names = [profile.legal_name] + profile.aliases
+    guidance_lines.append(
+        f"- **Company names to search:** {', '.join(search_names)}"
+    )
+    if profile.subsidiaries:
+        sub_names = [s.legal_name for s in profile.subsidiaries if s.legal_name]
+        guidance_lines.append(
+            f"- **Subsidiary names to search:** {', '.join(sub_names)}"
+        )
+    if profile.operating_countries:
+        guidance_lines.append(
+            f"- **Countries to focus on:** "
+            + ", ".join(_country_name(c) for c in profile.operating_countries)
+        )
+    if profile.material_asset_types:
+        type_names = [t.type for t in profile.material_asset_types if t.type]
+        if type_names:
+            guidance_lines.append(
+                f"- **Asset types to look for:** {', '.join(type_names)}"
             )
-        if profile.material_asset_types:
-            est_lines.append("Material asset types:")
-            for t in profile.material_asset_types:
-                if isinstance(t, dict):
-                    est_lines.append(f"  - {t}")
-                else:
-                    est_lines.append(f"  - {t}")
-        sections.append("\n".join(est_lines))
+    sections.append("\n".join(guidance_lines))
 
     return "\n".join(sections) + "\n"

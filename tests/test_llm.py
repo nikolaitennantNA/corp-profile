@@ -82,8 +82,8 @@ class TestOpenAIProvider:
         mock_msg.type = "message"
         mock_msg.content = [mock_text]
         mock_response = MagicMock()
-        mock_response.output = [mock_msg]
-        mock_client.responses.create.return_value = mock_response
+        mock_response.output_text = '{"found": true}'
+        mock_client.responses.parse.return_value = mock_response
 
         provider = OpenAIProvider(model="gpt-5")
         result = provider.complete(
@@ -91,7 +91,7 @@ class TestOpenAIProvider:
             web_search=True,
         )
         assert result == '{"found": true}'
-        mock_client.responses.create.assert_called_once()
+        mock_client.responses.parse.assert_called_once()
 
 
 def test_get_provider_openai():

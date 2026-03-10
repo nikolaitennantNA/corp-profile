@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import sys
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from .profile import (
-    build_context_document,
     build_profile,
     build_profile_from_file,
     save_profile,
@@ -17,7 +20,7 @@ from .profile import (
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="corp-profile",
-        description="Build rich company context documents from corp-graph Postgres",
+        description="Build rich company context documents from corp-graph or JSON files",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -30,22 +33,23 @@ def main() -> None:
     )
     build_source.add_argument("--from-file", help="Load profile from JSON file")
     build_cmd.add_argument(
-        "-o", "--output", help="Save profile JSON to file instead of printing"
+        "-o", "--output", help="Also save profile JSON to this path"
     )
     build_cmd.add_argument(
-        "--enrich", action="store_true", help="Run LLM enrichment on the profile"
+        "--llm", action="store_true", help="Run LLM enrichment on the profile"
     )
-
-    # enrich command
-    enrich_cmd = sub.add_parser("enrich", help="Enrich an existing profile JSON")
-    enrich_cmd.add_argument("file", help="Path to profile JSON file")
-    enrich_cmd.add_argument(
-        "-o", "--output", help="Save enriched profile to file (default: print)"
+    build_cmd.add_argument(
+        "--web", action="store_true",
+        help="Enable web search during LLM enrichment (implies --llm)",
     )
 
     args = parser.parse_args()
 
     if args.command == "build":
+        # --web implies --llm
+        if args.web:
+            args.llm = True
+
         try:
             if args.from_file:
                 profile = build_profile_from_file(args.from_file)
@@ -55,23 +59,15 @@ def main() -> None:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
 
-        if args.enrich:
-            profile = _run_enrich(profile)
+        if args.llm:
+            profile = _run_enrich(profile, web_search=args.web)
 
         if args.output:
             save_profile(profile, args.output)
-            print(f"Profile saved to {args.output}", file=sys.stderr)
-        elif args.enrich:
-            out_path = save_profile_markdown(profile)
-            print(f"Saved to {out_path}", file=sys.stderr)
-        else:
-            print(build_context_document(profile))
+            print(f"Profile JSON saved to {args.output}", file=sys.stderr)
 
-    elif args.command == "enrich":
-        profile = build_profile_from_file(args.file)
-        profile = _run_enrich(profile)
-
-        out_path = save_profile_markdown(profile, args.output)
+        # Always save markdown — this is what downstream LLMs consume
+        out_path = save_profile_markdown(profile)
         print(f"Saved to {out_path}", file=sys.stderr)
 
     else:
@@ -79,15 +75,19 @@ def main() -> None:
         sys.exit(1)
 
 
-def _run_enrich(profile):
+def _run_enrich(profile, *, web_search: bool = False):
     """Run enrichment and print changes to stderr."""
     from .enrich import EnrichConfig, enrich_profile
 
     try:
-        config = EnrichConfig.from_env()
+        config = EnrichConfig.load()
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # CLI --web flag overrides config
+    if web_search:
+        config = config.model_copy(update={"web_search": True})
 
     try:
         profile, changes = enrich_profile(profile, config)
