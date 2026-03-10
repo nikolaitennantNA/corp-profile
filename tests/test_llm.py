@@ -31,3 +31,70 @@ def test_get_provider_unknown():
     import pytest
     with pytest.raises(ValueError, match="Unknown provider"):
         get_provider("fakeprovider/model-1")
+
+
+from unittest.mock import MagicMock, patch
+
+
+class TestOpenAIProvider:
+    @patch("corp_profile.llm.openai.OpenAI")
+    def test_complete_basic(self, mock_openai_cls):
+        from corp_profile.llm.openai import OpenAIProvider
+
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content='{"result": "ok"}'))]
+        mock_client.chat.completions.create.return_value = mock_response
+
+        provider = OpenAIProvider(model="gpt-5")
+        result = provider.complete([{"role": "user", "content": "hello"}])
+        assert result == '{"result": "ok"}'
+        mock_client.chat.completions.create.assert_called_once()
+
+    @patch("corp_profile.llm.openai.OpenAI")
+    def test_complete_json_mode(self, mock_openai_cls):
+        from corp_profile.llm.openai import OpenAIProvider
+
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="{}"))]
+        mock_client.chat.completions.create.return_value = mock_response
+
+        provider = OpenAIProvider(model="gpt-5")
+        provider.complete([{"role": "user", "content": "hi"}], json_mode=True)
+
+        call_kwargs = mock_client.chat.completions.create.call_args
+        assert call_kwargs.kwargs.get("response_format") == {"type": "json_object"}
+
+    @patch("corp_profile.llm.openai.OpenAI")
+    def test_complete_with_web_search(self, mock_openai_cls):
+        from corp_profile.llm.openai import OpenAIProvider
+
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+
+        mock_text = MagicMock()
+        mock_text.type = "output_text"
+        mock_text.text = '{"found": true}'
+        mock_msg = MagicMock()
+        mock_msg.type = "message"
+        mock_msg.content = [mock_text]
+        mock_response = MagicMock()
+        mock_response.output = [mock_msg]
+        mock_client.responses.create.return_value = mock_response
+
+        provider = OpenAIProvider(model="gpt-5")
+        result = provider.complete(
+            [{"role": "user", "content": "search for Acme Corp"}],
+            web_search=True,
+        )
+        assert result == '{"found": true}'
+        mock_client.responses.create.assert_called_once()
+
+
+def test_get_provider_openai():
+    with patch("corp_profile.llm.openai.OpenAI"):
+        provider = get_provider("openai/gpt-5")
+        assert provider.model == "gpt-5"
