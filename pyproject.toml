@@ -9,6 +9,10 @@ dependencies = [
     "python-dotenv>=1.2.0",
 ]
 
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+bedrock = ["boto3>=1.35"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
