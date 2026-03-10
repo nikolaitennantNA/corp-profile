@@ -60,7 +60,7 @@ def _resolve_entity(conn, identifier: str) -> dict:
     if row:
         return dict(row)
 
-    # 4. Name (case-insensitive, exact then ILIKE prefix)
+    # 4. Name — exact match on legal_name or any alias (case-insensitive)
     row = conn.execute(
         "SELECT * FROM company_universe WHERE UPPER(legal_name) = UPPER(%s)",
         [identifier],
@@ -68,6 +68,14 @@ def _resolve_entity(conn, identifier: str) -> dict:
     if row:
         return dict(row)
 
+    row = conn.execute(
+        "SELECT * FROM company_universe WHERE alias_list @> ARRAY[%s]::varchar[]",
+        [identifier],
+    ).fetchone()
+    if row:
+        return dict(row)
+
+    # 5. Name — prefix match as last resort
     row = conn.execute(
         "SELECT * FROM company_universe WHERE legal_name ILIKE %s LIMIT 1",
         [f"{identifier}%"],
@@ -77,7 +85,7 @@ def _resolve_entity(conn, identifier: str) -> dict:
 
     raise LookupError(
         f"No entity found for '{identifier}'. "
-        "Tried matching as ISIN, LEI, issuer_id, and company name."
+        "Tried matching as ISIN, LEI, issuer_id, and company name/alias."
     )
 
 
