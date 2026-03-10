@@ -98,3 +98,65 @@ def test_get_provider_openai():
     with patch("corp_profile.llm.openai.OpenAI"):
         provider = get_provider("openai/gpt-5")
         assert provider.model == "gpt-5"
+
+
+class TestBedrockProvider:
+    @patch("corp_profile.llm.bedrock.boto3")
+    def test_complete_basic(self, mock_boto3):
+        from corp_profile.llm.bedrock import BedrockProvider
+
+        mock_client = MagicMock()
+        mock_boto3.client.return_value = mock_client
+        mock_client.converse.return_value = {
+            "output": {
+                "message": {
+                    "content": [{"text": '{"result": "ok"}'}]
+                }
+            }
+        }
+
+        provider = BedrockProvider(model="anthropic.claude-3-sonnet")
+        result = provider.complete([
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "hello"},
+        ])
+        assert result == '{"result": "ok"}'
+
+    @patch("corp_profile.llm.bedrock.boto3")
+    def test_complete_separates_system(self, mock_boto3):
+        from corp_profile.llm.bedrock import BedrockProvider
+
+        mock_client = MagicMock()
+        mock_boto3.client.return_value = mock_client
+        mock_client.converse.return_value = {
+            "output": {"message": {"content": [{"text": "{}"}]}}
+        }
+
+        provider = BedrockProvider(model="anthropic.claude-3-sonnet")
+        provider.complete([
+            {"role": "system", "content": "Be concise."},
+            {"role": "user", "content": "hi"},
+        ])
+
+        call_kwargs = mock_client.converse.call_args.kwargs
+        assert call_kwargs["system"] == [{"text": "Be concise."}]
+        assert len(call_kwargs["messages"]) == 1
+        assert call_kwargs["messages"][0]["role"] == "user"
+
+    @patch("corp_profile.llm.bedrock.boto3")
+    def test_web_search_not_supported(self, mock_boto3):
+        from corp_profile.llm.bedrock import BedrockProvider
+        import pytest
+
+        mock_boto3.client.return_value = MagicMock()
+        provider = BedrockProvider(model="anthropic.claude-3-sonnet")
+        with pytest.raises(NotImplementedError):
+            provider.complete(
+                [{"role": "user", "content": "hi"}], web_search=True
+            )
+
+
+def test_get_provider_bedrock():
+    with patch("corp_profile.llm.bedrock.boto3"):
+        provider = get_provider("bedrock/anthropic.claude-3-sonnet")
+        assert provider.model == "anthropic.claude-3-sonnet"
