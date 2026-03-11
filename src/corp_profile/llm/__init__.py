@@ -4,6 +4,22 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from pydantic import BaseModel
+
+from ..profile import CompanyProfile
+
+
+class EnrichmentResponse(BaseModel):
+    """Expected response shape from all enrichment stages.
+
+    Shared across providers so each can enforce this schema via its
+    native structured-output mechanism (OpenAI parsed completions,
+    Bedrock tool-use, etc.).
+    """
+
+    profile: CompanyProfile
+    changes: list[str] = []
+
 
 @runtime_checkable
 class LLMProvider(Protocol):

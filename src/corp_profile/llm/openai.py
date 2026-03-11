@@ -2,21 +2,12 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
-
 try:
     from openai import OpenAI
 except ImportError:  # pragma: no cover
     OpenAI = None  # type: ignore[assignment,misc]
 
-from ..profile import CompanyProfile
-
-
-class EnrichmentResponse(BaseModel):
-    """Expected response shape from all enrichment stages."""
-
-    profile: CompanyProfile
-    changes: list[str] = []
+from . import EnrichmentResponse
 
 
 class OpenAIProvider:
@@ -42,9 +33,12 @@ class OpenAIProvider:
 
         kwargs: dict = {"model": self.model, "messages": messages}
         if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
-
-        response = self.client.chat.completions.create(**kwargs)
+            # Use Pydantic structured output — the SDK enforces the schema
+            # server-side, guaranteeing valid JSON matching EnrichmentResponse.
+            kwargs["response_format"] = EnrichmentResponse
+            response = self.client.beta.chat.completions.parse(**kwargs)
+        else:
+            response = self.client.chat.completions.create(**kwargs)
         return response.choices[0].message.content or ""
 
     def _complete_with_search(
@@ -60,9 +54,15 @@ class OpenAIProvider:
             "model": self.model,
             "input": messages,
             "tools": [{"type": "web_search_preview"}],
+            "max_output_tokens": 16384,
         }
         if json_mode:
             kwargs["text_format"] = EnrichmentResponse
 
-        response = self.client.responses.parse(**kwargs)
+        try:
+            response = self.client.responses.parse(**kwargs)
+        except Exception:
+            # Truncated or malformed JSON — fall back to create() so
+            # _apply_stage can handle the error gracefully.
+            response = self.client.responses.create(**kwargs)
         return response.output_text

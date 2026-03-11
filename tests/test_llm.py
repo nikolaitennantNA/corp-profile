@@ -54,19 +54,19 @@ class TestOpenAIProvider:
 
     @patch("corp_profile.llm.openai.OpenAI")
     def test_complete_json_mode(self, mock_openai_cls):
-        from corp_profile.llm.openai import OpenAIProvider
+        from corp_profile.llm.openai import OpenAIProvider, EnrichmentResponse
 
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
         mock_response = MagicMock()
         mock_response.choices = [MagicMock(message=MagicMock(content="{}"))]
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_client.beta.chat.completions.parse.return_value = mock_response
 
         provider = OpenAIProvider(model="gpt-5")
         provider.complete([{"role": "user", "content": "hi"}], json_mode=True)
 
-        call_kwargs = mock_client.chat.completions.create.call_args
-        assert call_kwargs.kwargs.get("response_format") == {"type": "json_object"}
+        call_kwargs = mock_client.beta.chat.completions.parse.call_args
+        assert call_kwargs.kwargs.get("response_format") is EnrichmentResponse
 
     @patch("corp_profile.llm.openai.OpenAI")
     def test_complete_with_web_search(self, mock_openai_cls):

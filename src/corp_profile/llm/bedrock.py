@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 try:
     import boto3
 except ImportError:  # pragma: no cover
     boto3 = None  # type: ignore[assignment]
+
+from . import EnrichmentResponse
 
 
 class BedrockProvider:
@@ -50,9 +54,30 @@ class BedrockProvider:
         kwargs: dict = {
             "modelId": self.model,
             "messages": converse_messages,
+            "inferenceConfig": {"maxTokens": 16384},
         }
         if system_parts:
             kwargs["system"] = system_parts
 
+        if json_mode:
+            # Use tool-use to enforce the EnrichmentResponse schema.
+            # Force the model to call the tool, guaranteeing structured output.
+            schema = EnrichmentResponse.model_json_schema()
+            kwargs["toolConfig"] = {
+                "tools": [{
+                    "toolSpec": {
+                        "name": "enrichment_response",
+                        "description": "Return the enriched company profile and list of changes made.",
+                        "inputSchema": {"json": schema},
+                    }
+                }],
+                "toolChoice": {"tool": {"name": "enrichment_response"}},
+            }
+
         response = self.client.converse(**kwargs)
+
+        # Extract result: tool-use input (json_mode) or plain text
+        for block in response["output"]["message"]["content"]:
+            if "toolUse" in block:
+                return json.dumps(block["toolUse"]["input"])
         return response["output"]["message"]["content"][0]["text"]
