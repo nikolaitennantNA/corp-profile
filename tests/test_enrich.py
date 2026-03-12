@@ -65,7 +65,11 @@ class TestEnrichProfile:
             "profile": cleaned_data,
             "changes": [],
         })
-        mock_provider = self._make_mock_provider([clean_response, enrich_response])
+        refine_response = json.dumps({
+            "material_asset_types": [{"type": "Manufacturing Facility", "count": 45}],
+            "estimated_asset_count": 150,
+        })
+        mock_provider = self._make_mock_provider([clean_response, enrich_response, refine_response])
         mock_get_provider.return_value = mock_provider
 
         config = EnrichConfig(model="openai/gpt-5")
@@ -73,7 +77,7 @@ class TestEnrichProfile:
 
         assert result.legal_name == "Acme Corporation"
         assert "Fixed company name" in changes[0]
-        assert mock_provider.complete.call_count == 2
+        assert mock_provider.complete.call_count == 3
 
     @patch("corp_profile.enrich.get_provider")
     def test_with_web_search(self, mock_get_provider, sample_profile):
@@ -82,7 +86,11 @@ class TestEnrichProfile:
         search_response = json.dumps({"profile": profile_data, "changes": []})
         enrich_response = json.dumps({"profile": profile_data, "changes": []})
 
-        mock_main = self._make_mock_provider([clean_response, enrich_response])
+        refine_response = json.dumps({
+            "material_asset_types": [{"type": "Manufacturing Facility", "count": 45}],
+            "estimated_asset_count": 150,
+        })
+        mock_main = self._make_mock_provider([clean_response, enrich_response, refine_response])
         mock_search = self._make_mock_provider([search_response])
 
         def pick_provider(slug, **kwargs):
@@ -99,8 +107,8 @@ class TestEnrichProfile:
         )
         result, changes = enrich_profile(sample_profile, config)
 
-        # Main provider called for clean + enrich
-        assert mock_main.complete.call_count == 2
+        # Main provider called for clean + enrich + refine
+        assert mock_main.complete.call_count == 3
         # Search provider called once with web_search=True
         mock_search.complete.assert_called_once()
         search_call = mock_search.complete.call_args
@@ -110,7 +118,7 @@ class TestEnrichProfile:
     def test_web_search_defaults_to_main_model(self, mock_get_provider, sample_profile):
         profile_data = sample_profile.model_dump()
         response = json.dumps({"profile": profile_data, "changes": []})
-        mock_provider = self._make_mock_provider([response, response, response])
+        mock_provider = self._make_mock_provider([response, response, response, response])
         mock_get_provider.return_value = mock_provider
 
         config = EnrichConfig(model="openai/gpt-5", web_search=True)

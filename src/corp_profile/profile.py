@@ -362,6 +362,20 @@ def _country_name(code: str) -> str:
     return country.name if country else code
 
 
+def refine_estimates(
+    profile: CompanyProfile,
+    llm_response: dict,
+) -> CompanyProfile:
+    """Apply LLM-refined estimates to a profile."""
+    if "material_asset_types" in llm_response:
+        profile.material_asset_types = [
+            MaterialAssetType(**t) for t in llm_response["material_asset_types"]
+        ]
+    if "estimated_asset_count" in llm_response:
+        profile.estimated_asset_count = llm_response["estimated_asset_count"]
+    return profile
+
+
 def build_context_document(profile: CompanyProfile) -> str:
     """Render a CompanyProfile as a structured markdown document for LLM consumption.
 

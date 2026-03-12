@@ -162,4 +162,41 @@ def enrich_profile(
     enrich_raw = provider.complete(enrich_messages, json_mode=True)
     profile = _apply_stage(enrich_raw, "enrich") or profile
 
+    # Stage 3: Refine guestimator estimates
+    if profile.material_asset_types:
+        refine_messages = [
+            {"role": "system", "content": prompts.REFINE_ESTIMATES_SYSTEM},
+            {"role": "user", "content": json.dumps(profile.model_dump(), default=str)},
+        ]
+        refine_raw = provider.complete(refine_messages, json_mode=True)
+        try:
+            refine_data = json.loads(_strip_markdown_fences(refine_raw))
+        except json.JSONDecodeError:
+            all_changes.append("[refine_estimates] WARNING: LLM returned invalid JSON, skipping")
+            refine_data = {}
+        if refine_data:
+            from .profile import refine_estimates
+            profile = refine_estimates(profile, refine_data)
+            all_changes.append("Refined guestimator asset count estimates via LLM")
+
     return profile, all_changes
+
+
+async def _refine_estimates_stage(
+    profile: CompanyProfile,
+    provider,
+) -> CompanyProfile:
+    """Stage 3: Refine guestimator estimates using LLM knowledge of the company."""
+    if not profile.material_asset_types:
+        return profile
+
+    from .prompts import REFINE_ESTIMATES_SYSTEM
+    messages = [
+        {"role": "system", "content": REFINE_ESTIMATES_SYSTEM},
+        {"role": "user", "content": profile.model_dump_json()},
+    ]
+    response = await provider.complete(messages, json_mode=True)
+    import json as _json
+    data = _json.loads(response)
+    from .profile import refine_estimates
+    return refine_estimates(profile, data)

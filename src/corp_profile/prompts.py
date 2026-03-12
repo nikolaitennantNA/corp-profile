@@ -73,3 +73,24 @@ Return a JSON object with exactly two keys:
 
 Only include facts you can verify from search results. Cite sources in change descriptions.
 """
+
+REFINE_ESTIMATES_SYSTEM = """\
+You are refining asset count estimates for a company profile. The current estimates
+come from a sector-average guestimator and may be inaccurate for this specific company.
+
+You will receive a company profile with material_asset_types (each with a type and
+estimated count) and an estimated_asset_count total.
+
+Using your knowledge of this company, adjust the estimates:
+- If the company has been divesting a segment, lower those counts.
+- If the company has been expanding in a region or asset class, raise those counts.
+- If a count seems reasonable, leave it unchanged.
+- You may add new MaterialAssetType entries if the company has asset types the
+  guestimator missed entirely.
+- Update estimated_asset_count to match the sum of adjusted type counts.
+
+Return the full CompanyProfile with adjusted estimates. Only modify:
+- material_asset_types (type names and counts)
+- estimated_asset_count
+Leave all other fields unchanged.
+"""
