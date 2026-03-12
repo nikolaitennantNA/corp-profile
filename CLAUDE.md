@@ -21,7 +21,7 @@ python -m corp_profile build --from-file examples/totalenergies.json  # Build fr
 python -m corp_profile build FR0000120271 -o out.json                 # Also save profile JSON
 python -m corp_profile build --from-file examples/totalenergies.json --llm        # + LLM enrichment
 python -m corp_profile build --from-file examples/totalenergies.json --llm --web  # + LLM + web search
-# --web implies --llm
+# --web implies --llm; both can be defaulted on in config.toml [profile]
 ```
 
 ```bash
@@ -47,6 +47,8 @@ uv run pytest tests/test_llm.py::TestOpenAIProvider -v  # Single test class
 **Enrichment pipeline** (`enrich.py`): Three stages — clean (fix names, normalize jurisdictions, dedup) → optional web search (OpenAI Responses API only) → enrich (improve descriptions, add context). Each stage returns `{"profile": {...}, "changes": [...]}`.
 
 **Web search** uses `responses.parse()` with Pydantic `EnrichmentResponse` model for structured output — this works with web search tools unlike `json_object` mode which OpenAI blocks. Bedrock does not support web search.
+
+**Config structure** (`config.toml`): `[profile]` section has `llm` and `web` toggles (matching CLI flags). `[llm]` section has `model` and `web_search_model`. `[aws]` section has `region`/`profile`. CLI flags override config defaults.
 
 **Config precedence** (`EnrichConfig.load()`): env vars → `config.toml` → defaults. Secrets (API keys) stay in `.env`, app config in `config.toml`.
 

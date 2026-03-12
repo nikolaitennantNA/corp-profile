@@ -12,7 +12,7 @@ from .llm import get_provider
 from .profile import CompanyProfile
 
 
-def _load_config() -> dict:
+def load_config() -> dict:
     """Load config.toml from project root."""
     try:
         import tomllib
@@ -42,11 +42,12 @@ class EnrichConfig(BaseModel):
         Priority: env vars > config.toml > defaults.
         Secrets (API keys) stay in .env. App config lives in config.toml.
         """
-        cfg = _load_config()
-        llm = cfg.get("llm", {})
+        cfg = load_config()
+        llm_cfg = cfg.get("llm", {})
+        profile_cfg = cfg.get("profile", {})
         aws = cfg.get("aws", {})
 
-        model = os.environ.get("CORPPROFILE_LLM_MODEL") or llm.get("model")
+        model = os.environ.get("CORPPROFILE_LLM_MODEL") or llm_cfg.get("model")
         if not model:
             raise RuntimeError(
                 "LLM model not configured. Set model in [llm] in config.toml, "
@@ -57,11 +58,11 @@ class EnrichConfig(BaseModel):
         if web_search_env is not None:
             web_search = web_search_env.lower() == "true"
         else:
-            web_search = bool(llm.get("web_search", False))
+            web_search = bool(profile_cfg.get("web", False))
 
         web_search_model = (
             os.environ.get("CORPPROFILE_WEB_SEARCH_MODEL")
-            or llm.get("web_search_model")
+            or llm_cfg.get("web_search_model")
             or None
         )
 

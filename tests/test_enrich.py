@@ -14,8 +14,8 @@ class TestEnrichConfig:
         config = EnrichConfig.from_env()
         assert config.model == "openai/gpt-5"
         assert config.web_search is False
-        # web_search_model comes from config.toml if not set in env
-        assert config.web_search_model == "openai/gpt-4o"
+        # web_search_model comes from config.toml [llm] if not set in env
+        assert config.web_search_model == "openai/gpt-5-mini"
 
     def test_from_env_with_search(self, monkeypatch):
         monkeypatch.setenv("CORPPROFILE_LLM_MODEL", "bedrock/anthropic.claude-3-sonnet")

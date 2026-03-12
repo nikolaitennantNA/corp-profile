@@ -46,6 +46,15 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "build":
+        # Apply config.toml [profile] defaults — CLI flags override
+        from .enrich import load_config
+
+        profile_cfg = load_config().get("profile", {})
+        if profile_cfg.get("llm", False):
+            args.llm = True
+        if profile_cfg.get("web", False):
+            args.web = True
+
         # --web implies --llm
         if args.web:
             args.llm = True
