@@ -54,7 +54,7 @@ class DiscoveredAsset(_NullSafeModel):
     """An asset found during a previous search/discovery run."""
 
     asset_name: str = ""
-    asset_type: str = ""
+    asset_type_raw: str = ""
     address: str = ""
     latitude: float | None = None
     longitude: float | None = None
@@ -277,7 +277,7 @@ def build_profile(identifier: str) -> CompanyProfile:
         # 5. Previously discovered assets
         discovered = conn.execute(
             """
-            SELECT asset_name, asset_type, address, latitude, longitude
+            SELECT asset_name, asset_type_raw, address, latitude, longitude
             FROM discovered_assets WHERE issuer_id = %s
             """,
             [issuer_id],
@@ -543,8 +543,8 @@ def build_context_document(profile: CompanyProfile) -> str:
             )
             for d in sample_disc:
                 parts = [f"- **{d.asset_name or 'Unknown'}**"]
-                if d.asset_type:
-                    parts.append(f"[{d.asset_type}]")
+                if d.asset_type_raw:
+                    parts.append(f"[{d.asset_type_raw}]")
                 if d.address:
                     parts.append(f"— {d.address}")
                 asset_lines.append(" ".join(parts))
