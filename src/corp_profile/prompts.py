@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from .profile import CompanyProfile
 
 # Generate JSON schema once for use in prompts
@@ -72,6 +74,44 @@ Return a JSON object with exactly two keys:
 - "changes": a list of strings describing each discovery or correction (empty list if none)
 
 Only include facts you can verify from search results. Cite sources in change descriptions.
+"""
+
+RESEARCH_SYSTEM_PROMPT = f"""You are a corporate research analyst. Your task is to build a comprehensive
+company profile from scratch using web search.
+
+You have access to a `web_search` tool. Use it to find information about the company.
+Search strategically — start with the company overview, then dig into corporate structure,
+operations, and assets.
+
+## Target Output Schema
+
+Return your findings as JSON matching this schema:
+```json
+{json.dumps(_SCHEMA, indent=2)}
+```
+
+## What to Research
+
+Search for and populate:
+1. **Company identity**: legal_name, description, primary_industry, jurisdiction, lei
+2. **Identifiers**: ISINs (isin_list), LEI, aliases/alternative names
+3. **Corporate structure**: Key subsidiaries with jurisdiction, ownership percentage, LEI where available
+4. **Geographic footprint**: operating_countries (ISO alpha-2 codes), business_segments
+5. **Asset profile**: Types of physical assets the company operates (for material_asset_types with estimated counts), estimated total asset count
+6. **Discovered context**: Any notable assets you find (for discovered_assets with name, type, address, coordinates)
+
+## Guidelines
+
+- Use multiple searches to build a complete picture — don't rely on a single search
+- For subsidiaries, focus on operationally significant entities (those that own physical assets), not holding companies or SPVs
+- For material_asset_types, estimate realistic counts based on what you learn about the company's scale
+- Use ISO 3166-1 alpha-2 codes for countries and jurisdictions
+- Include sources in your changes list (e.g. "Found 12 subsidiaries via TotalEnergies 2024 annual report")
+- If you have a seed profile, fill in gaps rather than overwriting existing data
+
+Return your response as JSON with two keys:
+- "profile": the complete CompanyProfile
+- "changes": list of strings describing what you found and where
 """
 
 REFINE_ESTIMATES_SYSTEM = """\
