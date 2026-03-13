@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import warnings
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -65,17 +64,7 @@ class EnrichConfig(BaseModel):
         enrich = cfg.get("enrich", {})
         aws = cfg.get("aws", {})
 
-        # Support deprecated CORPPROFILE_LLM_MODEL env var
         model = os.environ.get("CORPPROFILE_ENRICH_MODEL")
-        if not model:
-            deprecated = os.environ.get("CORPPROFILE_LLM_MODEL")
-            if deprecated:
-                warnings.warn(
-                    "CORPPROFILE_LLM_MODEL is deprecated, use CORPPROFILE_ENRICH_MODEL",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                model = deprecated
         if not model:
             model = enrich.get("model")
         if not model:

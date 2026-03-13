@@ -36,7 +36,7 @@ def main() -> None:
         "-o", "--output", help="Also save profile JSON to this path"
     )
     build_cmd.add_argument(
-        "--enrich", "--llm", action="store_true", dest="enrich",
+        "--enrich", action="store_true",
         help="Run LLM enrichment on the profile",
     )
     build_cmd.add_argument(

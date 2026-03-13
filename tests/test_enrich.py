@@ -18,12 +18,6 @@ class TestEnrichConfig:
         config = EnrichConfig.load()
         assert config.model == "openai/gpt-5"
 
-    def test_deprecated_env_var(self, monkeypatch):
-        monkeypatch.setenv("CORPPROFILE_LLM_MODEL", "openai/gpt-5")
-        monkeypatch.delenv("CORPPROFILE_ENRICH_MODEL", raising=False)
-        config = EnrichConfig.load()
-        assert config.model == "openai/gpt-5"
-
     def test_direct_construction(self):
         config = EnrichConfig(model="openai/gpt-5")
         assert config.aws_region is None
