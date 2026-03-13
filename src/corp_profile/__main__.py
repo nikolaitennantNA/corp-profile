@@ -44,6 +44,19 @@ def main() -> None:
         help="Enable web search during enrichment (implies --enrich)",
     )
 
+    # research command
+    research_cmd = sub.add_parser("research", help="Research a company via web search (no DB needed)")
+    research_source = research_cmd.add_mutually_exclusive_group(required=True)
+    research_source.add_argument(
+        "identifier", nargs="?", default=None,
+        help="ISIN, LEI, issuer_id, or company name",
+    )
+    research_source.add_argument("--seed", help="Partial JSON file to seed research")
+    research_cmd.add_argument("--name", help="Company name to help search accuracy")
+    research_cmd.add_argument(
+        "-o", "--output", help="Also save profile JSON to this path"
+    )
+
     args = parser.parse_args()
 
     if args.command == "build":
@@ -70,6 +83,46 @@ def main() -> None:
 
         if args.enrich:
             profile = _run_enrich(profile, web=args.web)
+
+        if args.output:
+            save_profile(profile, args.output)
+            print(f"Profile JSON saved to {args.output}", file=sys.stderr)
+
+        out_path = save_profile_markdown(profile)
+        print(f"Saved to {out_path}", file=sys.stderr)
+
+    elif args.command == "research":
+        from .config import ResearchConfig
+        from .research import research_profile
+
+        try:
+            config = ResearchConfig.load()
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        seed = None
+        identifier = args.identifier
+        if args.seed:
+            seed = build_profile_from_file(args.seed)
+            if not identifier:
+                identifier = seed.issuer_id or (seed.isin_list[0] if seed.isin_list else None)
+
+        try:
+            profile, changes = research_profile(
+                identifier=identifier,
+                name=args.name,
+                seed=seed,
+                config=config,
+            )
+        except Exception as e:
+            print(f"Research failed: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        if changes:
+            print("Research findings:", file=sys.stderr)
+            for c in changes:
+                print(f"  - {c}", file=sys.stderr)
 
         if args.output:
             save_profile(profile, args.output)
