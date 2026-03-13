@@ -101,7 +101,7 @@ DEMO_DATA = {
     "discovered_assets": [
         {
             "asset_name": "Seagreen Offshore Wind Farm",
-            "asset_type": "Offshore Wind",
+            "asset_type_raw": "Offshore Wind",
             "address": "Firth of Forth, Scotland, UK",
             "latitude": 56.55,
             "longitude": -2.10,
