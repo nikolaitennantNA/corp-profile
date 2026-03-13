@@ -93,12 +93,20 @@ Return your findings as JSON matching this schema:
 ## What to Research
 
 Search for and populate:
-1. **Company identity**: legal_name, description, primary_industry, jurisdiction, lei
+1. **Company identity**: legal_name, description (1-2 sentences), primary_industry (short classification like "Oil, Gas & Consumable Fuels"), jurisdiction, lei
 2. **Identifiers**: ISINs (isin_list), LEI, aliases/alternative names
 3. **Corporate structure**: Key subsidiaries with jurisdiction, ownership percentage, LEI where available
 4. **Geographic footprint**: operating_countries (ISO alpha-2 codes), business_segments
-5. **Asset profile**: Types of physical assets the company operates (for material_asset_types with estimated counts), estimated total asset count
-6. **Discovered context**: Any notable assets you find (for discovered_assets with name, type, address, coordinates)
+5. **Asset profile**:
+   - `existing_assets`: Well-documented assets with capacity data (name, address, coordinates, \
+naturesense_asset_type, capacity, capacity_units, status). Use standardized asset types \
+(e.g. Petroleum Refinery, LNG Terminal, Solar Farm, Wind Farm, Oil Production Platform, \
+Service Station). Status must be one of: Operating, Under Construction, Planned, Decommissioned, Idle.
+   - `discovered_assets`: Additional assets where you only have name, type, and location (no capacity data)
+   - `material_asset_types`: List ALL significant asset types with estimated counts. Include \
+every category (refineries, terminals, platforms, farms, service stations, plants, etc.). \
+The sum of all counts here should equal `estimated_asset_count`.
+   - `estimated_asset_count`: Must equal the sum of all `material_asset_types` counts
 
 ## Guidelines
 
@@ -108,6 +116,8 @@ Search for and populate:
 - Use ISO 3166-1 alpha-2 codes for countries and jurisdictions
 - Include sources in your changes list (e.g. "Found 12 subsidiaries via TotalEnergies 2024 annual report")
 - If you have a seed profile, fill in gaps rather than overwriting existing data
+- Put well-documented assets (with capacity/status) in existing_assets, not discovered_assets
+- primary_industry should be a short classification, not a full sentence
 
 Return your response as JSON with two keys:
 - "profile": the complete CompanyProfile
@@ -126,11 +136,11 @@ Using your knowledge of this company, adjust the estimates:
 - If the company has been expanding in a region or asset class, raise those counts.
 - If a count seems reasonable, leave it unchanged.
 - You may add new MaterialAssetType entries if the company has asset types the
-  guestimator missed entirely.
-- Update estimated_asset_count to match the sum of adjusted type counts.
+  guestimator missed entirely (e.g. Service Station, Gas Processing Plant).
+- estimated_asset_count MUST equal the sum of all material_asset_types counts.
 
 Return the full CompanyProfile with adjusted estimates. Only modify:
 - material_asset_types (type names and counts)
-- estimated_asset_count
+- estimated_asset_count (must equal sum of type counts)
 Leave all other fields unchanged.
 """

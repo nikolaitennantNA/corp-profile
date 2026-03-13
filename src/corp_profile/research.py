@@ -97,6 +97,12 @@ def research_profile(
     else:
         raise RuntimeError("Research stage did not return a profile.")
 
+    # Ensure estimated_asset_count equals sum of material_asset_types
+    if profile.material_asset_types:
+        type_sum = sum(t.count for t in profile.material_asset_types if t.count is not None)
+        if type_sum > 0:
+            profile.estimated_asset_count = type_sum
+
     # --- Stage 2: Clean ---
     try:
         enrich_config = EnrichConfig.load()

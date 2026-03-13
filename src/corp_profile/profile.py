@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from .db import get_connection
 
@@ -44,10 +44,19 @@ class Asset(_NullSafeModel):
     address: str = ""
     latitude: float | None = None
     longitude: float | None = None
-    naturesense_asset_type: str = ""
+    naturesense_asset_type: str = Field(
+        default="",
+        description="Standardized asset type, e.g. Petroleum Refinery, LNG Terminal, "
+        "Solar Farm, Wind Farm, Oil Production Platform, Coal Mine, Power Plant, "
+        "Chemical Plant, Steel Mill, Cement Plant, Gas Processing Plant",
+    )
     capacity: float | None = None
     capacity_units: str = ""
-    status: str = ""
+    status: str = Field(
+        default="",
+        description="Short operational status: Operating, Under Construction, "
+        "Planned, Decommissioned, or Idle",
+    )
 
 
 class DiscoveredAsset(_NullSafeModel):
@@ -63,7 +72,13 @@ class DiscoveredAsset(_NullSafeModel):
 class MaterialAssetType(_NullSafeModel):
     """An expected asset type with optional estimated count."""
 
-    type: str = ""
+    type: str = Field(
+        default="",
+        description="Short standardized asset type name (2-3 words max), e.g. "
+        "Petroleum Refinery, LNG Terminal, Solar Farm, Wind Farm, "
+        "Oil Production Platform, Coal Mine, Power Plant, Service Station. "
+        "Do NOT use long compound names or slashes.",
+    )
     count: int | None = None
 
 
@@ -78,7 +93,11 @@ class CompanyProfile(BaseModel):
     all_isins: list[str] = []          # parent + all subsidiary ISINs
     aliases: list[str] = []
     description: str = ""
-    primary_industry: str = ""
+    primary_industry: str = Field(
+        default="",
+        description="Short industry classification, e.g. Oil, Gas & Consumable Fuels; "
+        "Electric Utilities; Metals & Mining; Chemicals",
+    )
     operating_countries: list[str] = []
     business_segments: list[str] = []
     subsidiaries: list[Subsidiary] = []
@@ -356,11 +375,13 @@ _ASSET_SAMPLE_SIZE = 10
 _SUB_SAMPLE_SIZE = 20
 
 def _country_name(code: str) -> str:
-    """Resolve an ISO country code to its full name via pycountry, falling back to the code."""
+    """Resolve an ISO country code to its common name via pycountry, falling back to the code."""
     import pycountry
 
     country = pycountry.countries.get(alpha_2=code.upper())
-    return country.name if country else code
+    if country is None:
+        return code
+    return getattr(country, "common_name", None) or country.name
 
 
 def refine_estimates(
@@ -372,7 +393,11 @@ def refine_estimates(
         profile.material_asset_types = [
             MaterialAssetType(**t) for t in llm_response["material_asset_types"]
         ]
-    if "estimated_asset_count" in llm_response:
+    # Always recompute total from per-type counts for consistency
+    type_sum = sum(t.count for t in profile.material_asset_types if t.count is not None)
+    if type_sum > 0:
+        profile.estimated_asset_count = type_sum
+    elif "estimated_asset_count" in llm_response:
         profile.estimated_asset_count = llm_response["estimated_asset_count"]
     return profile
 

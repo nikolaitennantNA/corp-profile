@@ -54,6 +54,8 @@ class ExaSearch:
 
         self.client = Exa(api_key=api_key)
 
+    _MAX_CONTENT_CHARS = 4000  # Cap per result to avoid blowing context windows
+
     def search(self, query: str, num_results: int = 5) -> list[SearchResult]:
         response = self.client.search_and_contents(
             query,
@@ -65,7 +67,7 @@ class ExaSearch:
             SearchResult(
                 title=r.title or "",
                 url=r.url or "",
-                content=r.text or "",
+                content=(r.text or "")[:self._MAX_CONTENT_CHARS],
             )
             for r in response.results
         ]
