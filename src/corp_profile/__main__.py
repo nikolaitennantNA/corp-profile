@@ -36,28 +36,28 @@ def main() -> None:
         "-o", "--output", help="Also save profile JSON to this path"
     )
     build_cmd.add_argument(
-        "--llm", action="store_true", help="Run LLM enrichment on the profile"
+        "--enrich", "--llm", action="store_true", dest="enrich",
+        help="Run LLM enrichment on the profile",
     )
     build_cmd.add_argument(
         "--web", action="store_true",
-        help="Enable web search during LLM enrichment (implies --llm)",
+        help="Enable web search during enrichment (implies --enrich)",
     )
 
     args = parser.parse_args()
 
     if args.command == "build":
-        # Apply config.toml [profile] defaults — CLI flags override
-        from .enrich import load_config
+        from .config import PipelineConfig
 
-        profile_cfg = load_config().get("profile", {})
-        if profile_cfg.get("llm", False):
-            args.llm = True
-        if profile_cfg.get("web", False):
+        pipeline_cfg = PipelineConfig.load()
+        if pipeline_cfg.enrich:
+            args.enrich = True
+        if pipeline_cfg.web:
             args.web = True
 
-        # --web implies --llm
+        # --web implies --enrich
         if args.web:
-            args.llm = True
+            args.enrich = True
 
         try:
             if args.from_file:
@@ -68,14 +68,13 @@ def main() -> None:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
 
-        if args.llm:
-            profile = _run_enrich(profile, web_search=args.web)
+        if args.enrich:
+            profile = _run_enrich(profile, web=args.web)
 
         if args.output:
             save_profile(profile, args.output)
             print(f"Profile JSON saved to {args.output}", file=sys.stderr)
 
-        # Always save markdown — this is what downstream LLMs consume
         out_path = save_profile_markdown(profile)
         print(f"Saved to {out_path}", file=sys.stderr)
 
@@ -84,22 +83,27 @@ def main() -> None:
         sys.exit(1)
 
 
-def _run_enrich(profile, *, web_search: bool = False):
+def _run_enrich(profile, *, web: bool = False):
     """Run enrichment and print changes to stderr."""
-    from .enrich import EnrichConfig, enrich_profile
+    from .config import EnrichConfig, WebConfig
+    from .enrich import enrich_profile
 
     try:
-        config = EnrichConfig.load()
+        enrich_config = EnrichConfig.load()
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # CLI --web flag overrides config
-    if web_search:
-        config = config.model_copy(update={"web_search": True})
+    web_config = None
+    if web:
+        try:
+            web_config = WebConfig.load()
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
     try:
-        profile, changes = enrich_profile(profile, config)
+        profile, changes = enrich_profile(profile, enrich_config, web_config=web_config)
     except Exception as e:
         print(f"Enrichment failed: {e}", file=sys.stderr)
         sys.exit(1)
