@@ -3,101 +3,24 @@
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 
-from pydantic import BaseModel
-
+from .config import EnrichConfig, WebConfig, load_config
 from .llm import get_provider
 from .profile import CompanyProfile
-
-
-def load_config() -> dict:
-    """Load config.toml from project root."""
-    try:
-        import tomllib
-    except ModuleNotFoundError:
-        import tomli as tomllib  # type: ignore[no-redef]
-
-    for candidate in [Path("config.toml"), Path(__file__).resolve().parents[3] / "config.toml"]:
-        if candidate.exists():
-            with open(candidate, "rb") as f:
-                return tomllib.load(f)
-    return {}
-
-
-class EnrichConfig(BaseModel):
-    """Configuration for LLM enrichment."""
-
-    model: str  # slug like "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
-    web_search: bool = False
-    web_search_model: str | None = None  # defaults to model if None
-    aws_region: str | None = None
-    aws_profile: str | None = None
-
-    @classmethod
-    def load(cls) -> EnrichConfig:
-        """Load config from config.toml, with env var overrides.
-
-        Priority: env vars > config.toml > defaults.
-        Secrets (API keys) stay in .env. App config lives in config.toml.
-        """
-        cfg = load_config()
-        llm_cfg = cfg.get("llm", {})
-        profile_cfg = cfg.get("profile", {})
-        aws = cfg.get("aws", {})
-
-        model = os.environ.get("CORPPROFILE_LLM_MODEL") or llm_cfg.get("model")
-        if not model:
-            raise RuntimeError(
-                "LLM model not configured. Set model in [llm] in config.toml, "
-                "or set CORPPROFILE_LLM_MODEL env var."
-            )
-
-        web_search_env = os.environ.get("CORPPROFILE_WEB_SEARCH")
-        if web_search_env is not None:
-            web_search = web_search_env.lower() == "true"
-        else:
-            web_search = bool(profile_cfg.get("web", False))
-
-        web_search_model = (
-            os.environ.get("CORPPROFILE_WEB_SEARCH_MODEL")
-            or llm_cfg.get("web_search_model")
-            or None
-        )
-
-        aws_region = (
-            os.environ.get("AWS_DEFAULT_REGION")
-            or aws.get("region")
-            or None
-        )
-        aws_profile = (
-            os.environ.get("AWS_PROFILE")
-            or aws.get("profile")
-            or None
-        )
-
-        return cls(
-            model=model,
-            web_search=web_search,
-            web_search_model=web_search_model,
-            aws_region=aws_region,
-            aws_profile=aws_profile,
-        )
-
-    @classmethod
-    def from_env(cls) -> EnrichConfig:
-        """Alias for load() — kept for backwards compatibility."""
-        return cls.load()
-
 
 from . import prompts
 
 
 def enrich_profile(
-    profile: CompanyProfile, config: EnrichConfig
+    profile: CompanyProfile,
+    config: EnrichConfig,
+    web_config: WebConfig | None = None,
 ) -> tuple[CompanyProfile, list[str]]:
-    """Run the two-stage enrichment pipeline on a profile.
+    """Run the enrichment pipeline on a profile.
+
+    Pipeline ordering:
+      --enrich only:  clean → enrich → refine
+      --web:          clean → web search → refine (enrich skipped)
 
     Returns (enriched_profile, list_of_changes).
     """
@@ -108,7 +31,6 @@ def enrich_profile(
         """Strip ```json ... ``` wrappers that LLMs often add."""
         text = text.strip()
         if text.startswith("```"):
-            # Remove opening fence (```json or ```)
             text = text.split("\n", 1)[1] if "\n" in text else text[3:]
         if text.endswith("```"):
             text = text[:-3]
@@ -134,7 +56,7 @@ def enrich_profile(
                 )
         return None
 
-    # Stage 1: Clean & validate
+    # Stage 1: Clean & validate (always runs)
     clean_messages = [
         {"role": "system", "content": prompts.CLEAN_SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps(profile.model_dump(), default=str)},
@@ -142,10 +64,15 @@ def enrich_profile(
     clean_raw = provider.complete(clean_messages, json_mode=True)
     profile = _apply_stage(clean_raw, "clean") or profile
 
-    # Stage 2a (optional): Web search for structured discovery
-    if config.web_search:
-        search_slug = config.web_search_model or config.model
-        search_provider = get_provider(search_slug, aws_region=config.aws_region, aws_profile=config.aws_profile)
+    # Stage 2: Web search OR LLM-only enrich (never both)
+    if web_config:
+        # Web search replaces enrich — real data with citations
+        search_slug = web_config.model
+        search_provider = get_provider(
+            search_slug,
+            aws_region=web_config.aws_region or config.aws_region,
+            aws_profile=web_config.aws_profile or config.aws_profile,
+        )
         search_messages = [
             {"role": "system", "content": prompts.WEB_SEARCH_ENRICH_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(profile.model_dump(), default=str)},
@@ -154,14 +81,14 @@ def enrich_profile(
             search_messages, json_mode=True, web_search=True
         )
         profile = _apply_stage(search_raw, "web_search") or profile
-
-    # Stage 2b: Enrich descriptions and context
-    enrich_messages = [
-        {"role": "system", "content": prompts.ENRICH_SYSTEM_PROMPT},
-        {"role": "user", "content": json.dumps(profile.model_dump(), default=str)},
-    ]
-    enrich_raw = provider.complete(enrich_messages, json_mode=True)
-    profile = _apply_stage(enrich_raw, "enrich") or profile
+    else:
+        # LLM-only enrich (best effort, no web)
+        enrich_messages = [
+            {"role": "system", "content": prompts.ENRICH_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(profile.model_dump(), default=str)},
+        ]
+        enrich_raw = provider.complete(enrich_messages, json_mode=True)
+        profile = _apply_stage(enrich_raw, "enrich") or profile
 
     # Stage 3: Refine guestimator estimates
     if profile.material_asset_types:
@@ -181,23 +108,3 @@ def enrich_profile(
             all_changes.append("Refined guestimator asset count estimates via LLM")
 
     return profile, all_changes
-
-
-async def _refine_estimates_stage(
-    profile: CompanyProfile,
-    provider,
-) -> CompanyProfile:
-    """Stage 3: Refine guestimator estimates using LLM knowledge of the company."""
-    if not profile.material_asset_types:
-        return profile
-
-    from .prompts import REFINE_ESTIMATES_SYSTEM
-    messages = [
-        {"role": "system", "content": REFINE_ESTIMATES_SYSTEM},
-        {"role": "user", "content": profile.model_dump_json()},
-    ]
-    response = await provider.complete(messages, json_mode=True)
-    import json as _json
-    data = _json.loads(response)
-    from .profile import refine_estimates
-    return refine_estimates(profile, data)
