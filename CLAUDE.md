@@ -31,29 +31,34 @@ python -m corp_profile research "TotalEnergies" -o out.json            # Also sa
 
 ```bash
 # Tests
-uv run pytest tests/ -v                           # Run all tests (53 total)
-uv run pytest tests/test_config.py -v             # Config class tests
-uv run pytest tests/test_profile_io.py -v         # Profile I/O round-trip tests
-uv run pytest tests/test_llm.py -v                # LLM provider tests
-uv run pytest tests/test_enrich.py -v             # Enrichment pipeline tests
-uv run pytest tests/test_search.py -v             # Search backend tests
-uv run pytest tests/test_research.py -v           # Research command tests
-uv run pytest tests/test_tool_loop.py -v          # Provider tool-use loop tests
-uv run pytest tests/test_demo.py -v -s            # Demo integration test (prints rendered output)
+uv run pytest tests/ -v                                 # Run all tests
+uv run pytest tests/test_config.py -v                   # Config class tests
+uv run pytest tests/test_profile_io.py -v               # Profile I/O round-trip tests
+uv run pytest tests/test_llm.py -v                      # LLM provider tests
+uv run pytest tests/test_enrich.py -v                   # Enrichment pipeline tests
+uv run pytest tests/test_search.py -v                   # Search backend tests
+uv run pytest tests/test_research.py -v                 # Research command tests
+uv run pytest tests/test_tool_loop.py -v                # Provider tool-use loop tests
+uv run pytest tests/test_estimate_refinement.py -v      # Asset estimate refinement tests
+uv run pytest tests/test_demo.py -v -s                  # Demo integration test (prints rendered output)
 uv run pytest tests/test_llm.py::TestOpenAIProvider -v  # Single test class
 ```
 
 ## Architecture
 
+Source code is under `src/corp_profile/` (src layout).
+
 **Data flow:** Source (DB/JSON) → `CompanyProfile` → optional `enrich_profile()` → `build_context_document()` → markdown in `outputs/`
 
 **Research flow:** Identifier/name → `research_profile()` (LLM + web search tool loop → clean) → `CompanyProfile`
 
-**Data models** (`profile.py`): `CompanyProfile` contains typed sub-models — `Subsidiary`, `Asset`, `DiscoveredAsset`, `MaterialAssetType`. These are proper Pydantic models (not `list[dict]`) so they work with OpenAI's structured outputs.
+**Data models** (`profile.py`): `CompanyProfile` contains typed sub-models — `Subsidiary`, `Asset`, `DiscoveredAsset`, `MaterialAssetType`. All inherit from `_NullSafeModel` which coerces DB NULLs to empty strings for `str` fields. These are proper Pydantic models (not `list[dict]`) so they work with OpenAI's structured outputs.
 
 **Entity resolution** (`profile.py:_resolve_entity`): Flexible 5-step lookup — ISIN on parent entity → ISIN via securities table → LEI → issuer_id → name/alias match → name prefix match.
 
-**LLM provider routing** (`llm/__init__.py`): Provider-agnostic slug format `provider/model` (e.g. `openai/gpt-5`, `bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0`). `parse_model_slug()` splits, `get_provider()` returns the right adapter. Both providers support `complete()` and `complete_with_tools()` for search tool-use loops.
+**DB layer** (`db.py`): `get_connection()` returns a psycopg connection with dict row factory, reading `CORPGRAPH_DB_URL` from env.
+
+**LLM provider routing** (`llm/__init__.py`): Provider-agnostic slug format `provider/model` (e.g. `openai/gpt-5`, `bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0`). `parse_model_slug()` splits, `get_provider()` returns the right adapter. Both providers support `complete()` and `complete_with_tools()` for search tool-use loops. JSON mode is enforced via OpenAI structured outputs (`beta.chat.completions.parse()`) or Bedrock tool-use with `toolChoice` force — both guarantee `EnrichmentResponse` schema.
 
 **Enrichment pipeline** (`enrich.py`): Pipeline ordering depends on flags:
 - `--enrich` only: clean → enrich → refine
@@ -64,6 +69,8 @@ Each stage returns `{"profile": {...}, "changes": [...]}`.
 **Research command** (`research.py`): Builds profiles from scratch via LLM + web search tool-use loop, then runs the clean stage. Uses `SearchBackend` protocol for Exa search (Bedrock models) or OpenAI built-in search (OpenAI models).
 
 **Search backend** (`search.py`): `SearchBackend` protocol with `ExaSearch` implementation. `get_search_backend()` routes: `"auto"` uses Exa for non-OpenAI models, `None` for OpenAI models (built-in search). `WEB_SEARCH_TOOL_SCHEMA` defines the tool for LLM function calling.
+
+**Prompts** (`prompts.py`): All LLM system prompts live here — `CLEAN_SYSTEM_PROMPT`, `ENRICH_SYSTEM_PROMPT`, `WEB_SEARCH_ENRICH_SYSTEM_PROMPT`, `REFINE_ESTIMATES_SYSTEM`, `RESEARCH_SYSTEM_PROMPT`. Each includes the `CompanyProfile` JSON schema and expects the LLM to return `{"profile": {...}, "changes": [...]}`.
 
 **Config structure** (`config.py` + `config.toml`): Per-stage config classes:
 - `[pipeline]` → `PipelineConfig`: `enrich` and `web` toggles (matching CLI flags)
@@ -76,7 +83,9 @@ Each stage returns `{"profile": {...}, "changes": [...]}`.
 
 **Lazy imports** (`__init__.py`): `EnrichConfig` and `enrich_profile` are lazy-loaded via `__getattr__` to avoid pulling in LLM dependencies when not needed.
 
-**Markdown renderer** (`build_context_document()`): Outputs sections optimized for asset search: Company Identity, Geographic Footprint, Corporate Structure, Asset Inventory (capped at 10 samples), Discovery Gaps, Search Guidance. Country codes resolved to full names via `pycountry`.
+**Markdown renderer** (`build_context_document()`): Outputs sections optimized for asset search: Company Identity, Geographic Footprint, Corporate Structure, Asset Inventory (capped at 10 samples), Discovery Gaps, Search Guidance. Country codes resolved to full names via `pycountry`. Subsidiaries capped at 20, ranked by data completeness.
+
+**Tests**: `conftest.py` provides `sample_profile_data` (dict) and `sample_profile` (`CompanyProfile` instance) fixtures used across all test modules.
 
 ## Key Dependencies
 
