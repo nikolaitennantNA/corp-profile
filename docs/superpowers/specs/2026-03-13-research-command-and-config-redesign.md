@@ -314,7 +314,6 @@ def research_profile(
     Pipeline:
       1. Research: LLM + web search tool-use loop → initial CompanyProfile
       2. Clean: fix names, normalize jurisdictions, dedup (existing stage)
-      3. Enrich: improve descriptions, fill remaining gaps (existing stage)
 
     Returns (profile, list_of_changes).
     """
@@ -347,23 +346,49 @@ The LLM drives the search — it decides what queries to run, follows leads, and
 ### Pipeline flow
 
 ```
-research_profile()
+research <identifier>:
     │
     ├─ 1. Research stage (new)
     │     LLM + web search tool → builds initial CompanyProfile
     │
-    ├─ 2. Clean stage (existing)
-    │     Fix garbled names, normalize jurisdictions, dedup subsidiaries
-    │
-    └─ 3. Enrich stage (existing)
-          Improve descriptions, expand operating countries/segments
+    └─ 2. Clean stage (existing)
+          Fix garbled names, normalize jurisdictions, dedup subsidiaries
 ```
 
-Refine estimates (stage 4 in `build`) is skipped — there are no guestimator estimates to refine. The LLM estimates asset types/counts directly during the research stage.
+No enrich or refine — research already populated the profile with web-sourced data including asset type estimates.
 
 ---
 
-## 5. `company_universe` Materialization Change
+## 5. Pipeline Ordering
+
+Three distinct pipelines depending on the command and flags:
+
+```
+build <identifier> --enrich (no web):
+  1. Clean         ← LLM fixes garbled names, normalizes jurisdictions, dedups
+  2. Enrich        ← LLM fills gaps using training knowledge (best effort, may hallucinate)
+  3. Refine        ← LLM adjusts guestimator asset counts (if estimates exist)
+
+build <identifier> --web (implies --enrich):
+  1. Clean         ← LLM fixes data quality
+  2. Web search    ← LLM + web finds real data with citations (replaces enrich)
+  3. Refine        ← LLM adjusts guestimator asset counts (if estimates exist)
+  (enrich stage SKIPPED — web search already covers everything enrich does, with real data)
+
+research <identifier>:
+  1. Research       ← LLM + web builds CompanyProfile from scratch
+  2. Clean          ← LLM fixes any issues in research output
+  (no enrich — research used web search)
+  (no refine — research estimated asset types directly)
+```
+
+**Key design decision:** When `--web` is enabled, the LLM-only enrich stage is skipped. The web search prompt already discovers subsidiaries, finds operating countries, identifies business segments, and improves descriptions — the same things enrich does — but with real, cited sources. Running enrich after web search risks overwriting verified facts with hallucinated data.
+
+Clean always runs first because web search needs a clean company name to search effectively.
+
+---
+
+## 6. `company_universe` Materialization Change
 
 **Repo:** corp-graph (`/Users/nikolai.tennant/Documents/GitHub/corp-graph`)
 **File:** `src/materialize.py`
@@ -392,7 +417,7 @@ In `build_profile()` (`profile.py`):
 
 ---
 
-## 6. New Dependencies
+## 7. New Dependencies
 
 | Package | Extra group | Purpose |
 |---------|-------------|---------|
@@ -400,7 +425,7 @@ In `build_profile()` (`profile.py`):
 
 ---
 
-## 7. Files Changed
+## 8. Files Changed
 
 ### corp-profile (primary)
 
@@ -411,7 +436,7 @@ In `build_profile()` (`profile.py`):
 | `src/corp_profile/research.py` | **New.** `research_profile()` function. |
 | `src/corp_profile/prompts.py` | Add `RESEARCH_SYSTEM_PROMPT`. |
 | `src/corp_profile/__main__.py` | Add `research` subcommand. Rename `--llm` to `--enrich`. |
-| `src/corp_profile/enrich.py` | Refactor to use new config classes. Use `complete_with_tools()` for web search stage. Remove old `EnrichConfig`. Remove dead `_refine_estimates_stage` async function. |
+| `src/corp_profile/enrich.py` | Refactor to use new config classes. Use `complete_with_tools()` for web search stage. Skip enrich stage when web search is enabled. Remove old `EnrichConfig`. Remove dead `_refine_estimates_stage` async function. |
 | `src/corp_profile/llm/__init__.py` | Update provider protocol with `complete_with_tools()`. |
 | `src/corp_profile/llm/bedrock.py` | Add `complete_with_tools()`. Remove `NotImplementedError` on `web_search`. |
 | `src/corp_profile/llm/openai.py` | Add `complete_with_tools()`. Keep `web_search_preview` as fallback. |
@@ -434,7 +459,7 @@ In `build_profile()` (`profile.py`):
 
 ---
 
-## 8. Testing
+## 9. Testing
 
 | Test | What it covers |
 |------|----------------|
