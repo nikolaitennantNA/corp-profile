@@ -177,7 +177,7 @@ def build_profile(identifier: str) -> CompanyProfile:
             jurisdiction=row.get("jurisdiction"),
             isin_list=row.get("isin_list") or [],
             aliases=row.get("alias_list") or [],
-            description=row.get("description") or "",
+            description=row.get("profile_description") or "",
             primary_industry=row.get("primary_industry") or "",
             operating_countries=row.get("operating_countries") or [],
             business_segments=row.get("business_segments") or [],
@@ -284,23 +284,24 @@ def build_profile(identifier: str) -> CompanyProfile:
         ).fetchall()
         profile.discovered_assets = [DiscoveredAsset.model_validate(dict(d)) for d in discovered]
 
-        # 6. Asset estimates
-        est = conn.execute(
-            """
-            SELECT estimated_assets_count, estimated_material_assets_count,
-                   material_assets_types
-            FROM asset_estimates WHERE issuer_id = %s
-            """,
-            [issuer_id],
-        ).fetchone()
-        if est:
-            profile.estimated_asset_count = est.get("estimated_assets_count")
-            raw_types = est.get("material_assets_types")
-            if isinstance(raw_types, list):
-                profile.material_asset_types = [
-                    MaterialAssetType.model_validate(t) if isinstance(t, dict) else MaterialAssetType(type=str(t))
-                    for t in raw_types
-                ]
+        # 6. Asset estimates (from company_universe row)
+        profile.estimated_asset_count = row.get("estimated_assets_count")
+        raw_types = row.get("material_assets_types")
+        if isinstance(raw_types, list):
+            parsed: list[MaterialAssetType] = []
+            for t in raw_types:
+                if isinstance(t, dict):
+                    if "type" in t:
+                        parsed.append(MaterialAssetType.model_validate(t))
+                    else:
+                        for name, count in t.items():
+                            parsed.append(MaterialAssetType(
+                                type=name,
+                                count=count if isinstance(count, int) else None,
+                            ))
+                else:
+                    parsed.append(MaterialAssetType(type=str(t)))
+            profile.material_asset_types = parsed
 
     return profile
 
