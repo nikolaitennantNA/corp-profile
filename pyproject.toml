@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-llm = ["openai>=1.0", "anthropic[bedrock]>=0.84.0"]
+llm = ["openai>=1.0", "anthropic[bedrock]>=0.84.0", "exa-py>=1.0"]
 
 [build-system]
 requires = ["hatchling"]
