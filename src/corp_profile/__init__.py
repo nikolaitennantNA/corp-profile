@@ -24,7 +24,7 @@ __all__ = [
 def __getattr__(name: str):
     """Lazy-load enrichment exports to avoid importing LLM deps eagerly."""
     if name == "EnrichConfig":
-        from .enrich import EnrichConfig
+        from .config import EnrichConfig
         return EnrichConfig
     if name == "enrich_profile":
         from .enrich import enrich_profile
