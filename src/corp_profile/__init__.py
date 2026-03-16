@@ -48,15 +48,23 @@ def run(
         python -m corp_profile build <identifier>
         python -m corp_profile build --from-file <path> --enrich --web
 
+    Modes:
+        - No flags: build profile from DB/file only, no LLM.
+        - enrich=True: clean → LLM enrich → refine estimates.
+        - web=True: clean → web search → refine estimates.
+          Web replaces enrich (real data beats LLM hallucination).
+          Works with OpenAI (built-in search) or Bedrock + Exa.
+
     Args:
         identifier: ISIN, LEI, issuer_id, or company name (requires DB).
         from_file: Path to JSON file (no DB needed).
-        enrich: Run LLM enrichment (clean + enrich + refine).
-        web: Run web search enrichment (implies enrich).
-        enrich_config: Optional EnrichConfig override. Loaded from
-            config.toml / env vars if not provided.
-        web_config: Optional WebConfig override. Loaded from
-            config.toml / env vars if not provided.
+        enrich: Run LLM-only enrichment (clean + enrich + refine).
+        web: Run web search enrichment (clean + web + refine).
+            Replaces enrich — setting both is the same as web=True.
+        enrich_config: Optional EnrichConfig override (model for clean/refine).
+            Loaded from config.toml / env vars if not provided.
+        web_config: Optional WebConfig override (model + search provider).
+            Loaded from config.toml / env vars if not provided.
 
     Returns:
         (profile, context_document) tuple.
@@ -64,15 +72,12 @@ def run(
     if not identifier and not from_file:
         raise ValueError("Provide identifier or from_file")
 
-    if web:
-        enrich = True
-
     if from_file:
         profile = build_profile_from_file(from_file)
     else:
         profile = build_profile(identifier)
 
-    if enrich:
+    if web or enrich:
         from .config import EnrichConfig as _EnrichConfig, WebConfig as _WebConfig
         from .enrich import enrich_profile as _enrich
 

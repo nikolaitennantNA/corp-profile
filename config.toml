@@ -1,17 +1,19 @@
 [pipeline]
-enrich = false                # default for --enrich CLI flag
-web = false                   # default for --web CLI flag
+enrich = false                # LLM-only enrichment (clean → enrich → refine)
+web = false                   # Web search enrichment (clean → web → refine)
+                              # Web replaces enrich — setting both is same as web only
 
 [research]
 model = "openai/gpt-5-mini"  # LLM for research command
-provider = "auto"             # search backend: "exa", "openai", or "auto"
+provider = "exa"              # Search backend: "exa" (always uses Exa), "openai" (built-in), "auto"
 
 [enrich]
-model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"  # LLM for clean/enrich/refine stages
 
 [web]
-model = "openai/gpt-5-mini"  # LLM for web enrichment stage
-provider = "auto"             # search backend: "exa", "openai", or "auto"
+model = "bedrock/us.anthropic.claude-sonnet-4-6-v1"  # LLM for web search stage
+provider = "exa"              # Search backend: "exa" (always uses Exa), "openai" (built-in), "auto"
+                              # "auto" = Exa for bedrock models, built-in for openai models
 
 [aws]
 region = "us-east-2"

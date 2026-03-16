@@ -61,8 +61,9 @@ Source code is under `src/corp_profile/` (src layout).
 **LLM provider routing** (`llm/__init__.py`): Provider-agnostic slug format `provider/model` (e.g. `openai/gpt-5`, `bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0`). `parse_model_slug()` splits, `get_provider()` returns the right adapter. Both providers support `complete()` and `complete_with_tools()` for search tool-use loops. JSON mode is enforced via OpenAI structured outputs (`beta.chat.completions.parse()`) or Bedrock tool-use with `toolChoice` force — both guarantee `EnrichmentResponse` schema.
 
 **Enrichment pipeline** (`enrich.py`): Pipeline ordering depends on flags:
-- `--enrich` only: clean → enrich → refine
+- `--enrich` only: clean → LLM enrich → refine
 - `--web`: clean → web search → refine (enrich skipped — web provides real data)
+- Web search works with any provider: OpenAI (built-in search) or Bedrock + Exa tool loop.
 
 Each stage returns `{"profile": {...}, "changes": [...]}`.
 
@@ -81,7 +82,7 @@ Each stage returns `{"profile": {...}, "changes": [...]}`.
 
 **Config precedence**: env vars → `config.toml` → defaults. Secrets (API keys) stay in `.env`, app config in `config.toml`.
 
-**Lazy imports** (`__init__.py`): `EnrichConfig` and `enrich_profile` are lazy-loaded via `__getattr__` to avoid pulling in LLM dependencies when not needed.
+**Public API** (`__init__.py`): Two high-level functions — `corp_profile.run()` (build + optional enrich/web) and `corp_profile.research()` (from-scratch via LLM + web). All config classes and lower-level functions are lazy-exported so `import corp_profile` doesn't pull in LLM deps until needed.
 
 **Markdown renderer** (`build_context_document()`): Outputs sections optimized for asset search: Company Identity, Geographic Footprint, Corporate Structure, Asset Inventory (capped at 10 samples), Discovery Gaps, Search Guidance. Country codes resolved to full names via `pycountry`. Subsidiaries capped at 20, ranked by data completeness.
 
@@ -104,3 +105,15 @@ Each stage returns `{"profile": {...}, "changes": [...]}`.
 - `CORPPROFILE_WEB_MODEL` — LLM slug (overrides `config.toml` `[web].model`)
 - `OPENAI_API_KEY` — required for OpenAI models (loaded from `.env` via dotenv)
 - `EXA_API_KEY` — required when search provider is "exa" (loaded from `.env` via dotenv)
+
+## TODO
+
+Upstream issues to fix in **corp-graph** (not this repo):
+
+- [ ] **Fold `asset_estimates` into `company_universe`**: `estimated_assets_count` and `material_assets_types` are NULL on canonical entities when the data lives on a resolved source entity. The `company_universe` build should join through `canonical_links` to pick up estimate data. Currently corp-profile has a fallback query to `asset_estimates` directly.
+- [ ] **Materialize GLEIF addresses into `assets` table**: `issuers.legal_address` and `hq_address` (JSONB) from GLEIF/FCA sources should be inserted into `assets` with `source = 'GLEIF'` etc. so corp-profile picks them up without source-specific extraction. ~3.2M entities have address data.
+- [ ] **Full asset type breakdown in guestimator**: `material_assets_types` only covers environmentally material assets. For Sprouts (380 assets, 3 material), 377 retail stores are unclassified. Either add an `estimated_asset_types` column with the full breakdown, or expand the guestimator to classify all types.
+
+Improvements for **this repo** and **asset-discovery**:
+
+- [ ] **Rename config sections for clarity**: In asset-discovery, `[search]` should be `[discover]` (it's the discover stage search provider). Corp-profile's `[web]` provider should be called `search_provider` or similar. General naming pass to make the config self-documenting.

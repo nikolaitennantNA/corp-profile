@@ -49,7 +49,7 @@ class TestResearchConfig:
     def test_load_from_toml(self):
         cfg = ResearchConfig.load()
         assert cfg.model == "openai/gpt-5-mini"
-        assert cfg.provider == "auto"
+        assert cfg.provider == "exa"
 
     def test_env_override(self, monkeypatch):
         monkeypatch.setenv("CORPPROFILE_RESEARCH_MODEL", "bedrock/claude-opus")
@@ -60,8 +60,8 @@ class TestResearchConfig:
 class TestWebConfig:
     def test_load_from_toml(self):
         cfg = WebConfig.load()
-        assert cfg.model == "openai/gpt-5-mini"
-        assert cfg.provider == "auto"
+        assert cfg.model == "bedrock/us.anthropic.claude-sonnet-4-6-v1"
+        assert cfg.provider == "exa"
 
     def test_env_override(self, monkeypatch):
         monkeypatch.setenv("CORPPROFILE_WEB_MODEL", "openai/gpt-5")

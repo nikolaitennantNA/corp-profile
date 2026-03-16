@@ -7,6 +7,7 @@ import json
 from .config import EnrichConfig, WebConfig, load_config
 from .llm import get_provider
 from .profile import CompanyProfile
+from .search import get_search_backend
 
 from . import prompts
 
@@ -77,9 +78,17 @@ def enrich_profile(
             {"role": "system", "content": prompts.WEB_SEARCH_ENRICH_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(profile.model_dump(), default=str)},
         ]
-        search_raw = search_provider.complete(
-            search_messages, json_mode=True, web_search=True
-        )
+        backend = get_search_backend(web_config.provider, model=search_slug)
+        if backend:
+            # Bedrock (or any non-OpenAI model) + Exa search tool loop
+            search_raw = search_provider.complete_with_tools(
+                search_messages, search_backend=backend, json_mode=True,
+            )
+        else:
+            # OpenAI built-in web search
+            search_raw = search_provider.complete(
+                search_messages, json_mode=True, web_search=True,
+            )
         profile = _apply_stage(search_raw, "web_search") or profile
     else:
         # LLM-only enrich (best effort, no web)
