@@ -77,13 +77,23 @@ def run(
     else:
         profile = build_profile(identifier)
 
-    if web or enrich:
-        from .config import EnrichConfig as _EnrichConfig, WebConfig as _WebConfig
-        from .enrich import enrich_profile as _enrich
+    # If no enrichment requested, try to return a cached enriched version
+    if not web and not enrich:
+        cached = _load_cached(profile.issuer_id)
+        if cached:
+            return cached, build_context_document(cached)
+        return profile, build_context_document(profile)
 
-        ec = enrich_config or _EnrichConfig.load()
-        wc = web_config or (_WebConfig.load() if web else None)
-        profile, _changes = _enrich(profile, ec, web_config=wc)
+    # Run enrichment
+    from .config import EnrichConfig as _EnrichConfig, WebConfig as _WebConfig
+    from .enrich import enrich_profile as _enrich
+
+    ec = enrich_config or _EnrichConfig.load()
+    wc = web_config or (_WebConfig.load() if web else None)
+    profile, _changes = _enrich(profile, ec, web_config=wc)
+
+    # Cache the enriched profile
+    _save_cached(profile)
 
     return profile, build_context_document(profile)
 
@@ -137,7 +147,37 @@ def research(
         config=rc,
     )
 
+    # Cache the researched profile
+    _save_cached(profile)
+
     return profile, build_context_document(profile)
+
+
+def _save_cached(profile: CompanyProfile) -> None:
+    """Best-effort cache of an enriched profile to DB."""
+    if not profile.issuer_id:
+        return
+    try:
+        from .db import get_connection, save_cached_profile
+        with get_connection() as conn:
+            save_cached_profile(conn, profile.issuer_id, profile.model_dump())
+    except Exception:
+        pass  # DB not available — skip caching silently
+
+
+def _load_cached(issuer_id: str) -> CompanyProfile | None:
+    """Load cached enriched profile from DB, or None."""
+    if not issuer_id:
+        return None
+    try:
+        from .db import get_connection, load_cached_profile
+        with get_connection() as conn:
+            data = load_cached_profile(conn, issuer_id)
+            if data:
+                return CompanyProfile.model_validate(data)
+    except Exception:
+        pass
+    return None
 
 
 # Lazy-load LLM-dependent exports to avoid pulling in openai/bedrock/exa

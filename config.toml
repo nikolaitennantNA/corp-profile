@@ -11,7 +11,7 @@ provider = "exa"              # Search backend: "exa" (always uses Exa), "openai
 model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"  # LLM for clean/enrich/refine stages
 
 [web]
-model = "bedrock/us.anthropic.claude-sonnet-4-6-v1"  # LLM for web search stage
+model = "bedrock/us.anthropic.claude-sonnet-4-6"  # LLM for web search stage
 provider = "exa"              # Search backend: "exa" (always uses Exa), "openai" (built-in), "auto"
                               # "auto" = Exa for bedrock models, built-in for openai models
 
