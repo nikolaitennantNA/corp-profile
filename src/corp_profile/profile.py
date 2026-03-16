@@ -107,6 +107,65 @@ class CompanyProfile(BaseModel):
     material_asset_types: list[MaterialAssetType] = []
 
 
+import re
+
+_STREET_NUMBER_RE = re.compile(r"(\d+)")
+_POSTAL_RE = re.compile(r"\b(\d{4,10})\b")
+_STRIP_PREFIXES_RE = re.compile(r"^(?:C/O|ATTN)\b[^,]*,\s*", re.IGNORECASE)
+_REGION_RE = re.compile(r"\bUS-([A-Z]{2})\b")
+
+
+def _address_dedup_key(address: str) -> str | None:
+    """Extract a normalized key for grouping duplicate addresses.
+
+    Returns 'postal:street_number' or None if not enough info.
+    """
+    if not address:
+        return None
+    addr = address.upper()
+    addr = _STRIP_PREFIXES_RE.sub("", addr)
+    addr = _REGION_RE.sub(r"\1", addr)
+
+    postal_m = _POSTAL_RE.search(addr)
+    street_m = _STREET_NUMBER_RE.search(addr)
+    if postal_m and street_m:
+        return f"{postal_m.group(1)}:{street_m.group(1)}"
+    return None
+
+
+def _asset_quality_score(asset: Asset) -> tuple:
+    """Score an asset for survivor selection — higher is better."""
+    has_coords = asset.latitude is not None and asset.longitude is not None
+    has_capacity = asset.capacity is not None
+    name_len = len(asset.asset_name or "")
+    return (has_coords, has_capacity, name_len)
+
+
+def _dedup_assets(assets: list[Asset]) -> list[Asset]:
+    """Deduplicate assets by postal code + street number.
+
+    Groups assets that share the same normalized key, keeps the
+    highest-quality entry from each group, discards the rest.
+    Assets without enough address info to generate a key are always kept.
+    """
+    groups: dict[str, list[Asset]] = {}
+    ungrouped: list[Asset] = []
+
+    for asset in assets:
+        key = _address_dedup_key(asset.address)
+        if key:
+            groups.setdefault(key, []).append(asset)
+        else:
+            ungrouped.append(asset)
+
+    result: list[Asset] = list(ungrouped)
+    for group in groups.values():
+        best = max(group, key=_asset_quality_score)
+        result.append(best)
+
+    return result
+
+
 def _resolve_entity(conn, identifier: str) -> dict:
     """Try to find an entity in company_universe by any identifier.
 
@@ -189,6 +248,16 @@ def build_profile(identifier: str) -> CompanyProfile:
 
         issuer_id = row["issuer_id"]
 
+        # Collect all issuer_ids that represent this entity: the canonical
+        # ID plus any source entities resolved to it via canonical_links.
+        # Data (assets, securities, relationships, profiles) may live on
+        # any of these IDs.
+        resolved_sources = conn.execute(
+            "SELECT source_id FROM canonical_links WHERE target_id = %s",
+            [issuer_id],
+        ).fetchall()
+        entity_ids = [issuer_id] + [r["source_id"] for r in resolved_sources]
+
         profile = CompanyProfile(
             issuer_id=issuer_id,
             legal_name=row.get("legal_name", ""),
@@ -204,25 +273,27 @@ def build_profile(identifier: str) -> CompanyProfile:
 
         # Prefer company_profiles name over issuers.legal_name (which may be
         # corrupted by GLEIF alias-match name adoption)
+        id_placeholders = ",".join(["%s"] * len(entity_ids))
         cp_row = conn.execute(
-            "SELECT company_name, official_name FROM company_profiles WHERE issuer_id = %s",
-            [issuer_id],
+            f"SELECT company_name, official_name FROM company_profiles WHERE issuer_id IN ({id_placeholders}) LIMIT 1",
+            entity_ids,
         ).fetchone()
         if cp_row:
             better_name = cp_row.get("official_name") or cp_row.get("company_name")
             if better_name:
                 profile.legal_name = better_name
 
-        # 2. Subsidiary tree
+        # 2. Subsidiary tree (check all resolved entity IDs as parent)
         subs = conn.execute(
-            """
+            f"""
             SELECT child.issuer_id, child.legal_name, child.jurisdiction, child.lei,
                    r.ownership_percentage, r.rel_type
             FROM relationships r
             JOIN issuers child ON child.issuer_id = r.child_issuer_id
-            WHERE r.parent_issuer_id = %s AND r.rel_status = 'ACTIVE'
+            WHERE r.rel_status = 'ACTIVE'
+              AND r.parent_issuer_id IN ({id_placeholders})
             """,
-            [issuer_id],
+            entity_ids,
         ).fetchall()
         # Dedup subsidiaries by name (case-insensitive), prefer entry with LEI
         seen: dict[str, dict] = {}
@@ -238,15 +309,15 @@ def build_profile(identifier: str) -> CompanyProfile:
                 seen[key] = d
         profile.subsidiaries = [Subsidiary.model_validate(v) for v in seen.values()]
 
-        # 2b. Aggregate ISINs from parent + all subsidiaries
+        # 2b. Aggregate ISINs from parent (all resolved IDs) + all subsidiaries
         sub_ids = [s.issuer_id for s in profile.subsidiaries if s.issuer_id]
-        all_ids = [issuer_id] + sub_ids
+        all_ids = entity_ids + sub_ids
         if all_ids:
-            placeholders = ",".join(["%s"] * len(all_ids))
+            all_id_placeholders = ",".join(["%s"] * len(all_ids))
             sub_isins = conn.execute(
                 f"""
                 SELECT DISTINCT isin FROM securities
-                WHERE issuer_id IN ({placeholders}) AND isin IS NOT NULL
+                WHERE issuer_id IN ({all_id_placeholders}) AND isin IS NOT NULL
                 ORDER BY isin
                 """,
                 all_ids,
@@ -255,31 +326,24 @@ def build_profile(identifier: str) -> CompanyProfile:
                 set(profile.isin_list) | {r["isin"] for r in sub_isins}
             )
 
-        # 3. Existing assets from ALD
+        # 3. Existing assets — parent (all resolved IDs) + subsidiaries
+        asset_ids = entity_ids + sub_ids
+        asset_id_placeholders = ",".join(["%s"] * len(asset_ids)) if asset_ids else "''"
         assets = conn.execute(
-            """
+            f"""
             SELECT asset_name, address, latitude, longitude, naturesense_asset_type,
                    capacity, capacity_units, status
-            FROM assets WHERE issuer_id = %s
+            FROM assets WHERE issuer_id IN ({asset_id_placeholders})
             """,
-            [issuer_id],
+            asset_ids,
         ).fetchall()
-        # Filter out unnamed assets that duplicate a named one at the same address
-        all_assets = [dict(a) for a in assets]
-        named = {
-            a["address"][:40]
-            for a in all_assets
-            if a.get("asset_name") and a.get("address")
-        }
-        profile.existing_assets = [
-            Asset.model_validate(a) for a in all_assets
-            if a.get("asset_name") or (a.get("address") or "")[:40] not in named
-        ]
+        all_assets = [Asset.model_validate(dict(a)) for a in assets]
+        profile.existing_assets = _dedup_assets(all_assets)
 
-        # 4. Company profile (enriched)
+        # 4. Company profile (enriched) — check all resolved entity IDs
         cp = conn.execute(
-            "SELECT * FROM company_profiles WHERE issuer_id = %s",
-            [issuer_id],
+            f"SELECT * FROM company_profiles WHERE issuer_id IN ({id_placeholders}) LIMIT 1",
+            entity_ids,
         ).fetchone()
         if cp:
             profile.description = cp.get("description") or profile.description
@@ -293,19 +357,34 @@ def build_profile(identifier: str) -> CompanyProfile:
                 cp.get("business_segments") or profile.business_segments
             )
 
-        # 5. Previously discovered assets
+        # 5. Previously discovered assets (check all resolved entity IDs)
         discovered = conn.execute(
-            """
+            f"""
             SELECT asset_name, asset_type_raw, address, latitude, longitude
-            FROM discovered_assets WHERE issuer_id = %s
+            FROM discovered_assets WHERE issuer_id IN ({id_placeholders})
             """,
-            [issuer_id],
+            entity_ids,
         ).fetchall()
         profile.discovered_assets = [DiscoveredAsset.model_validate(dict(d)) for d in discovered]
 
-        # 6. Asset estimates (from company_universe row)
-        profile.estimated_asset_count = row.get("estimated_assets_count")
+        # 6. Asset estimates — try company_universe first, fall back to
+        #    asset_estimates table (check all resolved entity IDs)
+        est_count = row.get("estimated_assets_count")
         raw_types = row.get("material_assets_types")
+        if est_count is None and raw_types is None:
+            est_row = conn.execute(
+                f"""
+                SELECT estimated_assets_count, material_assets_types
+                FROM asset_estimates WHERE issuer_id IN ({id_placeholders})
+                LIMIT 1
+                """,
+                entity_ids,
+            ).fetchone()
+            if est_row:
+                est_count = est_row.get("estimated_assets_count")
+                raw_types = est_row.get("material_assets_types")
+
+        profile.estimated_asset_count = est_count
         if isinstance(raw_types, list):
             parsed: list[MaterialAssetType] = []
             for t in raw_types:
@@ -520,12 +599,19 @@ def build_context_document(profile: CompanyProfile) -> str:
         if discovered_count:
             asset_lines.append(f"**Previously discovered:** {discovered_count}")
 
-        # Material asset types (what to search for)
+        # Material asset types (environmentally significant subset)
         if profile.material_asset_types:
-            asset_lines.append("\n### Expected Asset Types")
+            mat_total = sum(t.count for t in profile.material_asset_types if t.count)
+            header = "\n### Material Asset Types"
+            if profile.estimated_asset_count and mat_total < profile.estimated_asset_count:
+                header += (
+                    f" ({mat_total} of {profile.estimated_asset_count}"
+                    " estimated assets)"
+                )
+            asset_lines.append(header)
             for t in profile.material_asset_types:
                 if t.count is not None:
-                    asset_lines.append(f"- {t.type or 'Unknown'}: ~{t.count}")
+                    asset_lines.append(f"- {t.type or 'Unknown'}: {t.count}")
                 else:
                     asset_lines.append(f"- {t.type or 'Unknown'}")
 
