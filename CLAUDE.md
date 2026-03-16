@@ -117,3 +117,4 @@ Upstream issues to fix in **corp-graph** (not this repo):
 Improvements for **this repo** and **asset-discovery**:
 
 - [ ] **Rename config sections for clarity**: In asset-discovery, `[search]` should be `[discover]` (it's the discover stage search provider). Corp-profile's `[web]` provider should be called `search_provider` or similar. General naming pass to make the config self-documenting.
+- [ ] **Parallel multi-agent discovery**: Current discover stage is a single sequential agent. Redesign as Opus supervisor + Sonnet sub-agents: supervisor plans strategy (primary site, subsidiaries, regulatory, external), fans out to parallel Sonnet workers that each discover URLs independently, results merge. Eliminates Bedrock timeouts and provides ~3-4x speedup.
