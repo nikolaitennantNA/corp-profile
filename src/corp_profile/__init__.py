@@ -41,6 +41,7 @@ def run(
     web: bool = False,
     enrich_config: object | None = None,
     web_config: object | None = None,
+    skip_cache: bool = False,
 ) -> tuple[CompanyProfile, str]:
     """Build a company profile and context document.
 
@@ -79,9 +80,10 @@ def run(
 
     # If no enrichment requested, try to return a cached enriched version
     if not web and not enrich:
-        cached = _load_cached(profile.issuer_id)
-        if cached:
-            return cached, build_context_document(cached)
+        if not skip_cache:
+            cached = _load_cached(profile.issuer_id)
+            if cached:
+                return cached, build_context_document(cached)
         return profile, build_context_document(profile)
 
     # Run enrichment

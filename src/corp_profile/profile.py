@@ -472,9 +472,11 @@ def refine_estimates(
         profile.material_asset_types = [
             MaterialAssetType(**t) for t in llm_response["material_asset_types"]
         ]
-    # Always recompute total from per-type counts for consistency
+    # Recompute total from per-type counts, but only if the LLM actually
+    # refined the types — otherwise preserve the DB guesstimate which is
+    # the total asset count, not the number of asset *categories*.
     type_sum = sum(t.count for t in profile.material_asset_types if t.count is not None)
-    if type_sum > 0:
+    if "material_asset_types" in llm_response and type_sum > 0:
         profile.estimated_asset_count = type_sum
     elif "estimated_asset_count" in llm_response:
         profile.estimated_asset_count = llm_response["estimated_asset_count"]
