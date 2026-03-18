@@ -7,3 +7,4 @@ __pycache__/
 uv.lock
 outputs/
 docs/superpowers/
+.DS_Store
