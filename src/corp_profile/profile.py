@@ -93,6 +93,7 @@ class CompanyProfile(BaseModel):
     all_isins: list[str] = []          # parent + all subsidiary ISINs
     aliases: list[str] = []
     description: str = ""
+    primary_activities: str = ""
     primary_industry: str = Field(
         default="",
         description="Short industry classification, e.g. Oil, Gas & Consumable Fuels; "
@@ -266,6 +267,7 @@ def build_profile(identifier: str) -> CompanyProfile:
             isin_list=row.get("isin_list") or [],
             aliases=row.get("alias_list") or [],
             description=row.get("profile_description") or "",
+            primary_activities=row.get("primary_activities") or "",
             primary_industry=row.get("primary_industry") or "",
             operating_countries=row.get("operating_countries") or [],
             business_segments=row.get("business_segments") or [],
@@ -511,6 +513,8 @@ def build_context_document(profile: CompanyProfile) -> str:
         id_lines.append(f"**Also known as:** {', '.join(profile.aliases)}")
     if profile.description:
         id_lines.append(f"\n{profile.description}")
+    if profile.primary_activities:
+        id_lines.append(f"**Primary activities:** {profile.primary_activities}")
     sections.append("\n".join(id_lines))
 
     # --- Geographic Footprint ---
